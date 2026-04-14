@@ -86,6 +86,28 @@ describe("release-lib publish remote guard", () => {
     );
   });
 
+  it("rejects an upstream Paperclip ssh remote without explicit intent", async () => {
+    await withTempGitRepo(
+      {
+        origin: "ssh://git@github.com/paperclipai/paperclip.git",
+      },
+      async (cwd) => {
+        let error: unknown;
+        try {
+          await runReleaseLib(cwd, "resolve_release_remote", {
+            PUBLISH_REMOTE: "origin",
+          });
+        } catch (err) {
+          error = err;
+        }
+
+        expect(error).toBeTruthy();
+        const stderr = String((error as { stderr?: string }).stderr ?? "");
+        expect(stderr).toContain("refuses to target upstream repo paperclipai/paperclip");
+      },
+    );
+  });
+
   it("allows an upstream Paperclip remote when upstream intent is explicit", async () => {
     await withTempGitRepo(
       {

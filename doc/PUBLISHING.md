@@ -19,6 +19,8 @@ Paperclip no longer uses release branches or Changesets for publishing.
 
 Release scripts resolve the publish remote through [`scripts/release-lib.sh`](../scripts/release-lib.sh).
 For internal Paperclip work, they prefer a configured `fork` remote and fail closed if the selected GitHub remote resolves to `paperclipai/paperclip`.
+This guard applies to release and GitHub Release scripts; this repository does not currently include an in-repo PR-opening command path.
+PR target guardrails for agent workspaces and git remotes belong to the workspace/remote setup path tracked by DIG-564.
 
 If upstream publishing is intentionally being run by maintainers, set an explicit intent signal:
 

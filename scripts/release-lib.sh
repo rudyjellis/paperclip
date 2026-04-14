@@ -21,21 +21,26 @@ git_remote_exists() {
   git -C "$REPO_ROOT" remote get-url "$1" >/dev/null 2>&1
 }
 
+git_remote_url() {
+  git -C "$REPO_ROOT" remote get-url "$1" 2>/dev/null || true
+}
+
 github_repo_from_remote() {
   local remote_url
 
-  remote_url="$(git -C "$REPO_ROOT" remote get-url "$1" 2>/dev/null || true)"
+  remote_url="$(git_remote_url "$1")"
   [ -n "$remote_url" ] || return 1
 
   remote_url="${remote_url%.git}"
-  remote_url="${remote_url#ssh://}"
 
   node - "$remote_url" <<'NODE'
 const remoteUrl = process.argv[2];
 
 const patterns = [
-  /^https?:\/\/github\.com\/([^/]+\/[^/]+)$/,
-  /^git@github\.com:([^/]+\/[^/]+)$/,
+  /^https?:\/\/github\.com\/([^/]+\/[^/]+)$/i,
+  /^ssh:\/\/git@github\.com(?::\d+)?\/([^/]+\/[^/]+)$/i,
+  /^git@github\.com:([^/]+\/[^/]+)$/i,
+  /^git@github\.com\/([^/]+\/[^/]+)$/i,
   /^[^:]+:([^/]+\/[^/]+)$/
 ];
 
@@ -48,6 +53,21 @@ for (const pattern of patterns) {
 
 process.exit(1);
 NODE
+}
+
+github_remote_url_points_to_github_com() {
+  local remote_url
+
+  remote_url="$(git_remote_url "$1")"
+  remote_url="$(printf '%s' "$remote_url" | tr '[:upper:]' '[:lower:]')"
+
+  case "$remote_url" in
+    http://github.com/*|https://github.com/*|ssh://git@github.com/*|ssh://git@github.com:*|git@github.com:*|git@github.com/*)
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 normalize_github_repo_name() {
@@ -80,7 +100,12 @@ assert_paperclip_publish_remote_allowed() {
   local upstream_repo
 
   repo="$(github_repo_from_remote "$remote" || true)"
-  [ -n "$repo" ] || return 0
+  if [ -z "$repo" ]; then
+    if github_remote_url_points_to_github_com "$remote"; then
+      release_fail "Paperclip internal GitHub publish automation could not determine the GitHub repository for git remote '$remote'. Refusing to continue so it cannot silently target upstream; use a standard fork remote URL or submit an internal Paperclip issue for upstream coordination before setting PAPERCLIP_UPSTREAM_INTENT."
+    fi
+    return 0
+  fi
 
   upstream_repo="$(paperclip_upstream_repo_name)"
   if [ "$(normalize_github_repo_name "$repo")" != "$upstream_repo" ]; then
@@ -92,7 +117,7 @@ assert_paperclip_publish_remote_allowed() {
     return 0
   fi
 
-  release_fail "Paperclip internal publish/PR automation refuses to target upstream repo $upstream_repo via git remote '$remote'. Use the configured fork remote (for example PUBLISH_REMOTE=fork) for internal work, or submit an internal Paperclip issue for upstream coordination before setting PAPERCLIP_UPSTREAM_INTENT."
+  release_fail "Paperclip internal GitHub publish automation refuses to target upstream repo $upstream_repo via git remote '$remote'. Use the configured fork remote (for example PUBLISH_REMOTE=fork) for internal work, or submit an internal Paperclip issue for upstream coordination before setting PAPERCLIP_UPSTREAM_INTENT."
 }
 
 resolve_release_remote() {
