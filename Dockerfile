@@ -38,6 +38,7 @@ COPY packages/adapters/opencode-local/package.json packages/adapters/opencode-lo
 COPY packages/adapters/pi-local/package.json packages/adapters/pi-local/
 COPY packages/plugins/plugin-board-notify/package.json packages/plugins/plugin-board-notify/
 COPY packages/plugins/sdk/package.json packages/plugins/sdk/
+COPY packages/plugins/plugin-board-notify/package.json packages/plugins/plugin-board-notify/
 COPY patches/ patches/
 
 RUN pnpm install --frozen-lockfile
