@@ -38,6 +38,12 @@ This does:
 2. Runs `paperclipai doctor` with repair enabled
 3. Starts the server when checks pass
 
+## Fork-only Paperclip Workspaces
+
+Diger Studios' Paperclip control-plane workspace must target the fork at `https://github.com/rudyjellis/paperclip.git`. Keep the Paperclip project workspace `repoUrl`, local `origin`, and default push target pointed at that fork so agent checkouts, pushes, and PRs do not target `paperclipai/paperclip`.
+
+Represent upstream coordination as internal Paperclip issues first. Agents should not fetch from, push to, retarget, close, or make GitHub API requests against `paperclipai/paperclip` unless a human-approved owner explicitly routes that work.
+
 ## Bind Presets In Dev
 
 Default `pnpm dev` stays in `local_trusted` with loopback-only binding.

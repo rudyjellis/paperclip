@@ -164,6 +164,12 @@ If the `codex` CLI is not installed or not on `PATH`, `codex_local` agent runs f
 
 When developing from multiple git worktrees, do not point two Paperclip servers at the same embedded PostgreSQL data directory.
 
+### Fork-only Paperclip workspace policy
+
+Diger Studios' Paperclip control-plane project must target the fork at `https://github.com/rudyjellis/paperclip.git`. Keep the project workspace `repoUrl`, local `origin`, and default push target pointed at that fork so agent checkouts, pushes, and PRs do not target `paperclipai/paperclip`.
+
+Represent upstream coordination as internal Paperclip issues first. Agents should not fetch from, push to, retarget, close, or make GitHub API requests against `paperclipai/paperclip` unless a human-approved owner explicitly routes that work.
+
 Instead, create a repo-local Paperclip config plus an isolated instance for the worktree:
 
 ```sh
