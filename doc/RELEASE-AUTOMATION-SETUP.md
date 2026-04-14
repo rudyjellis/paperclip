@@ -236,7 +236,7 @@ After at least one good canary exists:
 Implementation note:
 
 - the GitHub Actions stable workflow calls `create-github-release.sh` with `PUBLISH_REMOTE=origin`
-- local maintainer usage can still pass `PUBLISH_REMOTE=public-gh` explicitly when needed
+- local maintainer usage can still pass `PAPERCLIP_UPSTREAM_INTENT=release PUBLISH_REMOTE=public-gh` explicitly when an upstream release is intended
 
 ## 13. Suggested Maintainer Policy
 

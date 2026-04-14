@@ -50,26 +50,81 @@ process.exit(1);
 NODE
 }
 
+normalize_github_repo_name() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#^/+##; s#/+$##; s#\.git$##'
+}
+
+paperclip_upstream_repo_name() {
+  normalize_github_repo_name "${PAPERCLIP_UPSTREAM_REPO:-paperclipai/paperclip}"
+}
+
+has_explicit_paperclip_upstream_intent() {
+  case "${PAPERCLIP_UPSTREAM_INTENT:-}" in
+    1|true|TRUE|yes|YES|release|github-actions-release|upstream)
+      return 0
+      ;;
+  esac
+
+  case "${PAPERCLIP_ALLOW_UPSTREAM_PUBLISH:-}" in
+    1|true|TRUE|yes|YES)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+assert_paperclip_publish_remote_allowed() {
+  local remote="$1"
+  local repo
+  local upstream_repo
+
+  repo="$(github_repo_from_remote "$remote" || true)"
+  [ -n "$repo" ] || return 0
+
+  upstream_repo="$(paperclip_upstream_repo_name)"
+  if [ "$(normalize_github_repo_name "$repo")" != "$upstream_repo" ]; then
+    return 0
+  fi
+
+  if has_explicit_paperclip_upstream_intent; then
+    release_warn "upstream Paperclip publish target allowed by PAPERCLIP_UPSTREAM_INTENT/PAPERCLIP_ALLOW_UPSTREAM_PUBLISH."
+    return 0
+  fi
+
+  release_fail "Paperclip internal publish/PR automation refuses to target upstream repo $upstream_repo via git remote '$remote'. Use the configured fork remote (for example PUBLISH_REMOTE=fork) for internal work, or submit an internal Paperclip issue for upstream coordination before setting PAPERCLIP_UPSTREAM_INTENT."
+}
+
 resolve_release_remote() {
   local remote="${RELEASE_REMOTE:-${PUBLISH_REMOTE:-}}"
 
   if [ -n "$remote" ]; then
     git_remote_exists "$remote" || release_fail "git remote '$remote' does not exist."
+    assert_paperclip_publish_remote_allowed "$remote"
     printf '%s\n' "$remote"
     return
   fi
 
+  if git_remote_exists fork; then
+    assert_paperclip_publish_remote_allowed fork
+    printf 'fork\n'
+    return
+  fi
+
   if git_remote_exists public-gh; then
+    assert_paperclip_publish_remote_allowed public-gh
     printf 'public-gh\n'
     return
   fi
 
   if git_remote_exists public; then
+    assert_paperclip_publish_remote_allowed public
     printf 'public\n'
     return
   fi
 
   if git_remote_exists origin; then
+    assert_paperclip_publish_remote_allowed origin
     printf 'origin\n'
     return
   fi

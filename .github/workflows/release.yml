@@ -103,6 +103,7 @@ jobs:
       - name: Publish canary
         env:
           GITHUB_ACTIONS: "true"
+          PAPERCLIP_UPSTREAM_INTENT: github-actions-release
         run: ./scripts/release.sh canary --skip-verify
 
       - name: Push canary tag
@@ -183,6 +184,7 @@ jobs:
       - name: Dry-run stable release
         env:
           GITHUB_ACTIONS: "true"
+          PAPERCLIP_UPSTREAM_INTENT: github-actions-release
         run: |
           args=(stable --skip-verify --dry-run)
           if [ -n "${{ inputs.stable_date }}" ]; then
@@ -232,6 +234,7 @@ jobs:
       - name: Publish stable
         env:
           GITHUB_ACTIONS: "true"
+          PAPERCLIP_UPSTREAM_INTENT: github-actions-release
         run: |
           args=(stable --skip-verify)
           if [ -n "${{ inputs.stable_date }}" ]; then
@@ -252,6 +255,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_REMOTE: origin
+          PAPERCLIP_UPSTREAM_INTENT: github-actions-release
         run: |
           version="$(git tag --points-at HEAD | grep '^v' | head -1 | sed 's/^v//')"
           if [ -z "$version" ]; then
