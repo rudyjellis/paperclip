@@ -75,6 +75,49 @@ describe("createBufferedTextFileWriter", () => {
 
 describeEmbeddedPostgres("runDatabaseBackup", () => {
   it(
+    "prunes automatic timestamped backups outside the local window and preserves manual safety files",
+    async () => {
+      const sourceConnectionString = await createTempDatabase();
+      const backupDir = createTempDir("paperclip-db-backup-retention-");
+      const now = Date.now();
+      const recent = new Date(now - 60 * 60 * 1000);
+      const old = new Date(now - 2 * 24 * 60 * 60 * 1000);
+      const older = new Date(now - 2 * 24 * 60 * 60 * 1000 - 60_000);
+      const oldest = new Date(now - 2 * 24 * 60 * 60 * 1000 - 120_000);
+
+      const recentAutomatic = path.join(backupDir, "paperclip-test-20260414-081709.sql.gz");
+      const oldAutomatic = path.join(backupDir, "paperclip-test-20260413-081709.sql.gz");
+      const olderAutomatic = path.join(backupDir, "paperclip-test-20260413-081609.sql.gz");
+      const manualSafety = path.join(backupDir, "paperclip-test-manual-20260412-230838.sql.gz");
+      const preRekeySafety = path.join(backupDir, "paperclip-test-pre-rekey-20260414-022951.sql.gz");
+
+      for (const file of [recentAutomatic, oldAutomatic, olderAutomatic, manualSafety, preRekeySafety]) {
+        fs.writeFileSync(file, "placeholder backup");
+      }
+      fs.utimesSync(recentAutomatic, recent, recent);
+      fs.utimesSync(oldAutomatic, old, old);
+      fs.utimesSync(olderAutomatic, older, older);
+      fs.utimesSync(manualSafety, oldest, oldest);
+      fs.utimesSync(preRekeySafety, oldest, oldest);
+
+      const result = await runDatabaseBackup({
+        connectionString: sourceConnectionString,
+        backupDir,
+        localRetentionDays: 1,
+        filenamePrefix: "paperclip-test",
+      });
+
+      expect(result.prunedCount).toBe(2);
+      expect(fs.existsSync(recentAutomatic)).toBe(true);
+      expect(fs.existsSync(oldAutomatic)).toBe(false);
+      expect(fs.existsSync(olderAutomatic)).toBe(false);
+      expect(fs.existsSync(manualSafety)).toBe(true);
+      expect(fs.existsSync(preRekeySafety)).toBe(true);
+    },
+    60_000,
+  );
+
+  it(
     "backs up and restores large table payloads without materializing one giant string",
     async () => {
       const sourceConnectionString = await createTempDatabase();
@@ -125,7 +168,7 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
         const result = await runDatabaseBackup({
           connectionString: sourceConnectionString,
           backupDir,
-          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+          localRetentionDays: 7,
           filenamePrefix: "paperclip-test",
         });
 
