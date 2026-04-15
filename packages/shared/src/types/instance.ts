@@ -5,6 +5,7 @@ export const WEEKLY_RETENTION_PRESETS = [1, 2, 4] as const;
 export const MONTHLY_RETENTION_PRESETS = [1, 3, 6] as const;
 
 export interface BackupRetentionPolicy {
+  /** Local automatic backup retention window. Remote archive retention is managed separately. */
   dailyDays: (typeof DAILY_RETENTION_PRESETS)[number];
   weeklyWeeks: (typeof WEEKLY_RETENTION_PRESETS)[number];
   monthlyMonths: (typeof MONTHLY_RETENTION_PRESETS)[number];

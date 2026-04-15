@@ -991,7 +991,7 @@ async function seedWorktreeDatabase(input: {
     const backup = await runDatabaseBackup({
       connectionString: sourceConnectionString,
       backupDir: path.resolve(input.targetPaths.backupDir, "seed"),
-      retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+      localRetentionDays: 7,
       filenamePrefix: `${input.instanceId}-seed`,
       includeMigrationJournal: true,
       excludeTables: seedPlan.excludedTables,
