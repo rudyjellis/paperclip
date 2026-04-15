@@ -129,6 +129,7 @@ describe("instance settings routes", () => {
         censorUsernameInLogs: true,
         keyboardShortcuts: true,
         feedbackDataSharingPreference: "allowed",
+        backupRetention: { dailyDays: 1, weeklyWeeks: 4, monthlyMonths: 1 },
       });
 
     expect(patchRes.status).toBe(200);
@@ -136,6 +137,7 @@ describe("instance settings routes", () => {
       censorUsernameInLogs: true,
       keyboardShortcuts: true,
       feedbackDataSharingPreference: "allowed",
+      backupRetention: { dailyDays: 1, weeklyWeeks: 4, monthlyMonths: 1 },
     });
     expect(mockLogActivity).toHaveBeenCalledTimes(2);
   });

@@ -75,6 +75,45 @@ describe("createBufferedTextFileWriter", () => {
 
 describeEmbeddedPostgres("runDatabaseBackup", () => {
   it(
+    "prunes only automatic timestamped backups and preserves manual safety files",
+    async () => {
+      const sourceConnectionString = await createTempDatabase();
+      const backupDir = createTempDir("paperclip-db-backup-retention-");
+      const now = Date.now();
+      const old = new Date(now - 2 * 24 * 60 * 60 * 1000);
+      const older = new Date(now - 2 * 24 * 60 * 60 * 1000 - 60_000);
+      const oldest = new Date(now - 2 * 24 * 60 * 60 * 1000 - 120_000);
+
+      const retainedAutomatic = path.join(backupDir, "paperclip-test-20260413-081709.sql.gz");
+      const prunableAutomatic = path.join(backupDir, "paperclip-test-20260413-081609.sql.gz");
+      const manualSafety = path.join(backupDir, "paperclip-test-manual-20260412-230838.sql.gz");
+      const preRekeySafety = path.join(backupDir, "paperclip-test-pre-rekey-20260414-022951.sql.gz");
+
+      for (const file of [retainedAutomatic, prunableAutomatic, manualSafety, preRekeySafety]) {
+        fs.writeFileSync(file, "placeholder backup");
+      }
+      fs.utimesSync(retainedAutomatic, old, old);
+      fs.utimesSync(prunableAutomatic, older, older);
+      fs.utimesSync(manualSafety, oldest, oldest);
+      fs.utimesSync(preRekeySafety, oldest, oldest);
+
+      const result = await runDatabaseBackup({
+        connectionString: sourceConnectionString,
+        backupDir,
+        retention: { dailyDays: 1, weeklyWeeks: 1, monthlyMonths: 1 },
+        filenamePrefix: "paperclip-test",
+      });
+
+      expect(result.prunedCount).toBe(1);
+      expect(fs.existsSync(retainedAutomatic)).toBe(true);
+      expect(fs.existsSync(prunableAutomatic)).toBe(false);
+      expect(fs.existsSync(manualSafety)).toBe(true);
+      expect(fs.existsSync(preRekeySafety)).toBe(true);
+    },
+    60_000,
+  );
+
+  it(
     "backs up and restores large table payloads without materializing one giant string",
     async () => {
       const sourceConnectionString = await createTempDatabase();

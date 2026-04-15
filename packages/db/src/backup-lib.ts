@@ -83,6 +83,15 @@ function timestamp(date: Date = new Date()): string {
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isAutomaticBackupName(name: string, filenamePrefix: string): boolean {
+  const automaticBackupPattern = new RegExp(`^${escapeRegex(filenamePrefix)}-\\d{8}-\\d{6}\\.sql(?:\\.gz)?$`);
+  return automaticBackupPattern.test(name);
+}
+
 /**
  * ISO week key for grouping backups by calendar week (ISO 8601).
  */
@@ -117,8 +126,7 @@ function pruneOldBackups(backupDir: string, retention: BackupRetentionPolicy, fi
   const entries: BackupEntry[] = [];
 
   for (const name of readdirSync(backupDir)) {
-    if (!name.startsWith(`${filenamePrefix}-`)) continue;
-    if (!name.endsWith(".sql") && !name.endsWith(".sql.gz")) continue;
+    if (!isAutomaticBackupName(name, filenamePrefix)) continue;
     const fullPath = resolve(backupDir, name);
     const stat = statSync(fullPath);
     entries.push({ name, fullPath, mtimeMs: stat.mtimeMs });
