@@ -167,6 +167,26 @@ pnpm paperclipai dashboard get --company-id <company-id>
 pnpm paperclipai heartbeat run --agent-id <agent-id> [--api-base http://localhost:3100] [--api-key <token>]
 ```
 
+## Worktree Commands
+
+Create and manage isolated local worktrees:
+
+```sh
+pnpm paperclipai worktree init
+pnpm paperclipai worktree:make <name>
+pnpm paperclipai worktree:list
+pnpm paperclipai worktree:cleanup <name>
+```
+
+Inventory generated dependency/build/cache directories that are safe to reclaim:
+
+```sh
+pnpm paperclipai worktree:clean-generated
+pnpm paperclipai worktree:clean-generated --apply
+```
+
+`worktree:clean-generated` is dry-run by default. It only deletes allowlisted generated directories when the worktree is git-clean, inactive, older than the configured age threshold, git-ignored, and contains no tracked files. It does not remove worktrees, branches, git metadata, source files, databases, backups, secrets, logs, or Paperclip instance data.
+
 ## Local Storage Defaults
 
 Default local instance root is `~/.paperclip/instances/default`:

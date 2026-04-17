@@ -325,6 +325,41 @@ pnpm paperclipai worktree env --json
 eval "$(pnpm paperclipai worktree env)"
 ```
 
+**`pnpm paperclipai worktree:clean-generated [options]`** — Inventory or remove ignored generated dependency/build directories from clean inactive Paperclip-managed worktrees.
+
+This command is for recurring local disk pressure from generated dependency and build artifacts such as `node_modules`, `dist`, `.next`, `.vite`, `.turbo`, and cache directories. It does not remove git worktrees, branches, commits, source files, git metadata, databases, backups, secrets, run logs, or Paperclip instance data.
+
+Default behavior is a dry run:
+
+```sh
+pnpm paperclipai worktree:clean-generated
+```
+
+Apply the reported plan:
+
+```sh
+pnpm paperclipai worktree:clean-generated --apply
+```
+
+Useful variants:
+
+```sh
+pnpm paperclipai worktree:clean-generated --min-age-hours 72
+pnpm paperclipai worktree:clean-generated --root /path/to/worktree --json
+pnpm paperclipai worktree:clean-generated --all-git-worktrees
+```
+
+Safety policy:
+
+- scans Paperclip-managed git worktrees by default; use `--root` or `--all-git-worktrees` to broaden scope intentionally
+- skips the current worktree unless `--include-current` is passed
+- skips worktrees with uncommitted or untracked source changes
+- skips worktrees when a running process has its current directory under that worktree
+- only considers an allowlist of generated dependency/build/cache directory names
+- only deletes a candidate when git says the directory is ignored and `git ls-files` reports no tracked files underneath it
+- requires the candidate directory to be older than `--min-age-hours` (default: 24)
+- reports every skipped worktree, skipped candidate, eligible candidate, and reclaimed byte count before deletion
+
 For project execution worktrees, Paperclip can also run a project-defined provision command after it creates or reuses an isolated git worktree. Configure this on the project's execution workspace policy (`workspaceStrategy.provisionCommand`). The command runs inside the derived worktree and receives `PAPERCLIP_WORKSPACE_*`, `PAPERCLIP_PROJECT_ID`, `PAPERCLIP_AGENT_ID`, and `PAPERCLIP_ISSUE_*` environment variables so each repo can bootstrap itself however it wants.
 
 ## Quick Health Checks
