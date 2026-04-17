@@ -48,6 +48,24 @@ Execution workspaces are durable until a human closes them.
 - Closing an execution workspace stops its runtime services and cleans up its workspace artifacts when allowed.
 - Shared workspaces that point at the project primary checkout are treated more conservatively during cleanup than disposable isolated workspaces.
 
+## Generated dependency cleanup
+
+Local Paperclip instances can accumulate large generated dependency and build directories across isolated worktrees. Operators can audit this disk pressure without removing worktrees or branches:
+
+```sh
+pnpm paperclipai worktree:clean-generated
+```
+
+The command is dry-run by default and only targets allowlisted generated directories such as `node_modules`, `dist`, `.next`, `.vite`, `.turbo`, and common cache directories. A directory is eligible only when the worktree is clean, live process inspection confirms no running process is using it as a current directory, the directory is older than the configured threshold, git ignores it, and no tracked files exist underneath it. If live process inspection is unavailable, the command skips the worktree and reports the reason.
+
+Apply the reported plan with:
+
+```sh
+pnpm paperclipai worktree:clean-generated --apply
+```
+
+This cleanup path is intentionally narrower than execution-workspace archival. It does not delete source files, git metadata, branches, run logs, backups, secrets, databases, or Paperclip instance data.
+
 ## Resolved workspace logic during heartbeat runs
 
 Heartbeat still resolves a workspace for the run, but that is about code location and session continuity, not runtime-service control.
