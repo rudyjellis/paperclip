@@ -355,6 +355,7 @@ Safety policy:
 - skips the current worktree unless `--include-current` is passed
 - skips worktrees with uncommitted or untracked source changes
 - skips worktrees when a running process has its current directory under that worktree
+- skips worktrees when live process inspection is unavailable, because inactivity cannot be confirmed
 - only considers an allowlist of generated dependency/build/cache directory names
 - only deletes a candidate when git says the directory is ignored and `git ls-files` reports no tracked files underneath it
 - requires the candidate directory to be older than `--min-age-hours` (default: 24)

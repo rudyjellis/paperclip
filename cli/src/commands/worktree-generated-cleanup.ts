@@ -114,6 +114,7 @@ export type PlanGeneratedDependencyCleanupInput = WorktreeGeneratedCleanupOption
   cwd?: string;
   now?: Date;
   checkLiveProcesses?: boolean;
+  liveProcessCwdChecker?: (root: string) => boolean | null;
 };
 
 type ParsedGitWorktree = {
@@ -150,6 +151,7 @@ export function planGeneratedDependencyCleanup(
       currentGitRoot,
       includeCurrent: input.includeCurrent === true,
       checkLiveProcesses: input.checkLiveProcesses !== false,
+      liveProcessCwdChecker: input.liveProcessCwdChecker,
       minAgeHours,
       maxDepth,
       now,
@@ -281,6 +283,7 @@ function inspectCleanupWorktree(input: {
   currentGitRoot: string | null;
   includeCurrent: boolean;
   checkLiveProcesses: boolean;
+  liveProcessCwdChecker?: (root: string) => boolean | null;
   minAgeHours: number;
   maxDepth: number;
   now: Date;
@@ -292,7 +295,7 @@ function inspectCleanupWorktree(input: {
     source: input.root.source,
     status: "skipped",
     reason: null,
-    liveProcessCheck: input.checkLiveProcesses ? "unavailable" : "skipped",
+    liveProcessCheck: "skipped",
     candidates: [],
   };
 
@@ -335,11 +338,9 @@ function inspectCleanupWorktree(input: {
     };
   }
 
-  let liveProcessCheck: GeneratedCleanupWorktree["liveProcessCheck"] = input.checkLiveProcesses
-    ? "unavailable"
-    : "skipped";
+  let liveProcessCheck: GeneratedCleanupWorktree["liveProcessCheck"] = "skipped";
   if (input.checkLiveProcesses) {
-    const hasLiveProcess = hasLiveProcessCwdUnder(gitRoot);
+    const hasLiveProcess = (input.liveProcessCwdChecker ?? hasLiveProcessCwdUnder)(gitRoot);
     if (hasLiveProcess === true) {
       return {
         ...base,
@@ -348,7 +349,15 @@ function inspectCleanupWorktree(input: {
         reason: "a running process has its current directory inside this worktree",
       };
     }
-    liveProcessCheck = hasLiveProcess === false ? "passed" : "unavailable";
+    if (hasLiveProcess === null) {
+      return {
+        ...base,
+        path: gitRoot,
+        liveProcessCheck: "unavailable",
+        reason: "live process inspection is unavailable; cannot confirm worktree is inactive",
+      };
+    }
+    liveProcessCheck = "passed";
   }
 
   return {

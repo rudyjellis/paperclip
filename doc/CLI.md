@@ -185,7 +185,7 @@ pnpm paperclipai worktree:clean-generated
 pnpm paperclipai worktree:clean-generated --apply
 ```
 
-`worktree:clean-generated` is dry-run by default. It only deletes allowlisted generated directories when the worktree is git-clean, inactive, older than the configured age threshold, git-ignored, and contains no tracked files. It does not remove worktrees, branches, git metadata, source files, databases, backups, secrets, logs, or Paperclip instance data.
+`worktree:clean-generated` is dry-run by default. It only deletes allowlisted generated directories when the worktree is git-clean, confirmed inactive, older than the configured age threshold, git-ignored, and contains no tracked files. If live process inspection is unavailable, the command skips that worktree and reports the reason. It does not remove worktrees, branches, git metadata, source files, databases, backups, secrets, logs, or Paperclip instance data.
 
 ## Local Storage Defaults
 

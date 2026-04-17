@@ -92,6 +92,26 @@ describe("worktree generated dependency cleanup", () => {
     expect(fs.existsSync(path.join(repo, "node_modules"))).toBe(true);
   });
 
+  it("skips worktrees when live process inspection is unavailable", () => {
+    const repo = createTempRepo();
+    fs.mkdirSync(path.join(repo, "node_modules", "pkg"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "node_modules", "pkg", "index.js"), "module.exports = 1;\n", "utf8");
+
+    const plan = planGeneratedDependencyCleanup({
+      root: [repo],
+      minAgeHours: 0,
+      liveProcessCwdChecker: () => null,
+    });
+
+    expect(plan.summary.scannedWorktrees).toBe(0);
+    expect(plan.summary.skippedWorktrees).toBe(1);
+    expect(plan.summary.eligibleCandidates).toBe(0);
+    expect(plan.worktrees[0]?.liveProcessCheck).toBe("unavailable");
+    expect(plan.worktrees[0]?.reason).toContain("cannot confirm worktree is inactive");
+    expect(plan.worktrees[0]?.candidates).toEqual([]);
+    expect(fs.existsSync(path.join(repo, "node_modules"))).toBe(true);
+  });
+
   it("does not mark matching directories eligible when they contain tracked files", () => {
     const repo = createTempRepo();
     fs.mkdirSync(path.join(repo, "dist"), { recursive: true });
