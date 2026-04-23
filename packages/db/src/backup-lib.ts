@@ -478,7 +478,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         });
         await writer.abort();
         const sizeBytes = statSync(backupFile).size;
-        const prunedCount = pruneOldBackups(opts.backupDir, retention, filenamePrefix);
+        const prunedCount = pruneOldBackups(opts.backupDir, localRetentionDays, filenamePrefix);
         return {
           backupFile,
           sizeBytes,

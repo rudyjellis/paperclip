@@ -5902,7 +5902,7 @@ export function heartbeatService(db: Db) {
             legacySessionId: nextSessionState.legacySessionId,
           },
           normalizedUsage,
-          { lastError: persistedError },
+          { lastError: runErrorMessage },
         );
         if (taskKey) {
           if (adapterResult.clearSession || (!nextSessionState.params && !nextSessionState.displayId)) {
@@ -5919,7 +5919,7 @@ export function heartbeatService(db: Db) {
               sessionParamsJson: nextSessionState.params,
               sessionDisplayId: nextSessionState.displayId,
               lastRunId: finalizedRun.id,
-              lastError: outcome === "succeeded" ? null : (persistedError ?? "run_failed"),
+              lastError: outcome === "succeeded" ? null : (runErrorMessage ?? "run_failed"),
             });
           }
         }
