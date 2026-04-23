@@ -79,6 +79,10 @@ import {
   type PlannedIssueDocumentMerge,
   type PlannedIssueInsert,
 } from "./worktree-merge-history-lib.js";
+import {
+  collectGeneratedCleanupRoot,
+  worktreeGeneratedCleanupCommand,
+} from "./worktree-generated-cleanup.js";
 
 type WorktreeInitOptions = {
   name?: string;
@@ -3338,4 +3342,16 @@ export function registerWorktreeCommands(program: Command): void {
     .option("--home <path>", `Home root for worktree instances (env: PAPERCLIP_WORKTREES_DIR, default: ${DEFAULT_WORKTREE_HOME})`)
     .option("--force", "Bypass safety checks (uncommitted changes, unique commits)", false)
     .action(worktreeCleanupCommand);
+
+  program
+    .command("worktree:clean-generated")
+    .description("Dry-run or remove ignored generated dependency/build directories from clean inactive Paperclip worktrees")
+    .option("--root <path>", "Explicit git worktree root to scan (repeatable)", collectGeneratedCleanupRoot, [])
+    .option("--all-git-worktrees", "Scan every git worktree instead of only Paperclip-managed worktrees", false)
+    .option("--include-current", "Include the current worktree; skipped by default as an active workspace guard", false)
+    .option("--min-age-hours <hours>", "Minimum generated directory age before cleanup", (value) => Number(value), 24)
+    .option("--max-depth <depth>", "Maximum directory depth to scan inside each worktree", (value) => Number(value), 6)
+    .option("--apply", "Delete eligible generated directories after reporting the plan", false)
+    .option("--json", "Print the cleanup plan as JSON")
+    .action(worktreeGeneratedCleanupCommand);
 }
