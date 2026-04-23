@@ -170,6 +170,7 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
           backupDir,
           localRetentionDays: 7,
           filenamePrefix: "paperclip-test",
+          backupEngine: "javascript",
         });
 
         expect(result.backupFile).toMatch(/paperclip-test-.*\.sql\.gz$/);
@@ -191,14 +192,17 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
           title: string;
           payload: string;
           state: string;
-          metadata: { index: number; even: boolean };
+          metadata: { index: number; even: boolean } | string;
         }[]>(`
           SELECT "title", "payload", "state"::text AS "state", "metadata"
           FROM "public"."backup_test_records"
           WHERE "title" IN ('row-0', 'row-159')
           ORDER BY "title"
         `);
-        expect(sampleRows).toEqual([
+        expect(sampleRows.map((row) => ({
+          ...row,
+          metadata: typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata,
+        }))).toEqual([
           {
             title: "row-0",
             payload,
