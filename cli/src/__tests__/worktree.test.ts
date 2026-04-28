@@ -1076,6 +1076,55 @@ describe("worktree helpers", () => {
     }
   }, 20_000);
 
+  it("accepts namespaced local tag start points", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-worktree-make-tag-"));
+    const repoRoot = path.join(tempRoot, "repo");
+    const fakeHome = path.join(tempRoot, "home");
+    const worktreePath = path.join(fakeHome, "paperclip-tag-start-point");
+    const originalCwd = process.cwd();
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    const tagName = "deploy/default/20260428-6940f34d";
+
+    try {
+      fs.mkdirSync(repoRoot, { recursive: true });
+      fs.mkdirSync(fakeHome, { recursive: true });
+      execFileSync("git", ["init"], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "Test User"], { cwd: repoRoot, stdio: "ignore" });
+      fs.writeFileSync(path.join(repoRoot, "README.md"), "# temp\n", "utf8");
+      execFileSync("git", ["add", "README.md"], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "Initial commit"], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["tag", tagName], { cwd: repoRoot, stdio: "ignore" });
+
+      process.chdir(repoRoot);
+
+      await worktreeMakeCommand("paperclip-tag-start-point", {
+        seed: false,
+        home: path.join(tempRoot, ".paperclip-worktrees"),
+        startPoint: tagName,
+      });
+
+      expect(fs.existsSync(path.join(worktreePath, ".git"))).toBe(true);
+      expect(
+        execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: worktreePath,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim(),
+      ).toBe(
+        execFileSync("git", ["rev-parse", `${tagName}^{commit}`], {
+          cwd: repoRoot,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim(),
+      );
+    } finally {
+      process.chdir(originalCwd);
+      homedirSpy.mockRestore();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it("no-ops on the primary checkout unless --branch is provided", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-worktree-repair-primary-"));
     const repoRoot = path.join(tempRoot, "repo");
