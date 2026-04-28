@@ -3,14 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   acquireInstanceServerLockMock,
   createAppMock,
+  createBetterAuthInstanceMock,
   createDbMock,
   detectPortMock,
+  deriveAuthTrustedOriginsMock,
   feedbackExportServiceMock,
   feedbackServiceFactoryMock,
   fakeServer,
+  loadConfigMock,
   markListeningMock,
 } = vi.hoisted(() => {
   const createAppMock = vi.fn(async () => ((_: unknown, __: unknown) => {}) as never);
+  const createBetterAuthInstanceMock = vi.fn(() => ({}));
   const createDbMock = vi.fn(() => ({}) as never);
   const detectPortMock = vi.fn(async (port: number) => port);
   const markListeningMock = vi.fn(async () => undefined);
@@ -20,6 +24,7 @@ const {
     markListening: markListeningMock,
     release: vi.fn(async () => undefined),
   }));
+  const deriveAuthTrustedOriginsMock = vi.fn(() => []);
   const feedbackExportServiceMock = {
     flushPendingFeedbackTraces: vi.fn(async () => ({ attempted: 0, sent: 0, failed: 0 })),
   };
@@ -33,48 +38,25 @@ const {
     }),
     close: vi.fn(),
   };
+  const loadConfigMock = vi.fn();
 
   return {
     acquireInstanceServerLockMock,
     createAppMock,
+    createBetterAuthInstanceMock,
     createDbMock,
     detectPortMock,
+    deriveAuthTrustedOriginsMock,
     feedbackExportServiceMock,
     feedbackServiceFactoryMock,
     fakeServer,
+    loadConfigMock,
     markListeningMock,
   };
 });
 
-vi.mock("node:http", () => ({
-  createServer: vi.fn(() => fakeServer),
-}));
-
-vi.mock("detect-port", () => ({
-  default: detectPortMock,
-}));
-
-vi.mock("@paperclipai/db", () => ({
-  createDb: createDbMock,
-  ensurePostgresDatabase: vi.fn(),
-  getPostgresDataDirectory: vi.fn(),
-  inspectMigrations: vi.fn(async () => ({ status: "upToDate" })),
-  applyPendingMigrations: vi.fn(),
-  reconcilePendingMigrationHistory: vi.fn(async () => ({ repairedMigrations: [] })),
-  formatDatabaseBackupResult: vi.fn(() => "ok"),
-  runDatabaseBackup: vi.fn(),
-  authUsers: {},
-  companies: {},
-  companyMemberships: {},
-  instanceUserRoles: {},
-}));
-
-vi.mock("../app.js", () => ({
-  createApp: createAppMock,
-}));
-
-vi.mock("../config.js", () => ({
-  loadConfig: vi.fn(() => ({
+function buildTestConfig(overrides: Record<string, unknown> = {}) {
+  return {
     deploymentMode: "authenticated",
     deploymentExposure: "private",
     bind: "loopback",
@@ -110,11 +92,46 @@ vi.mock("../config.js", () => ({
     heartbeatSchedulerEnabled: false,
     heartbeatSchedulerIntervalMs: 30000,
     companyDeletionEnabled: false,
-  })),
+    ...overrides,
+  };
+}
+
+vi.mock("node:http", () => ({
+  createServer: vi.fn(() => fakeServer),
+}));
+
+vi.mock("detect-port", () => ({
+  default: detectPortMock,
+}));
+
+vi.mock("@paperclipai/db", () => ({
+  createDb: createDbMock,
+  ensurePostgresDatabase: vi.fn(),
+  getPostgresDataDirectory: vi.fn(),
+  inspectMigrations: vi.fn(async () => ({ status: "upToDate" })),
+  applyPendingMigrations: vi.fn(),
+  reconcilePendingMigrationHistory: vi.fn(async () => ({ repairedMigrations: [] })),
+  formatDatabaseBackupResult: vi.fn(() => "ok"),
+  runDatabaseBackup: vi.fn(),
+  authUsers: {},
+  companies: {},
+  companyMemberships: {},
+  instanceUserRoles: {},
+}));
+
+vi.mock("../app.js", () => ({
+  createApp: createAppMock,
+}));
+
+vi.mock("../config.js", () => ({
+  loadConfig: loadConfigMock,
 }));
 
 vi.mock("../middleware/logger.js", () => ({
   logger: {
+    child: vi.fn(function child() {
+      return this;
+    }),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
@@ -178,8 +195,8 @@ vi.mock("../board-claim.js", () => ({
 
 vi.mock("../auth/better-auth.js", () => ({
   createBetterAuthHandler: vi.fn(() => undefined),
-  createBetterAuthInstance: vi.fn(() => ({})),
-  deriveAuthTrustedOrigins: vi.fn(() => []),
+  createBetterAuthInstance: createBetterAuthInstanceMock,
+  deriveAuthTrustedOrigins: deriveAuthTrustedOriginsMock,
   resolveBetterAuthSession: vi.fn(async () => null),
   resolveBetterAuthSessionFromHeaders: vi.fn(async () => null),
 }));
@@ -189,6 +206,9 @@ import { startServer } from "../index.ts";
 describe("startServer feedback export wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    loadConfigMock.mockReturnValue(buildTestConfig());
+    createBetterAuthInstanceMock.mockReturnValue({});
+    deriveAuthTrustedOriginsMock.mockReturnValue([]);
     process.env.BETTER_AUTH_SECRET = "test-secret";
   });
 
@@ -215,9 +235,56 @@ describe("startServer feedback export wiring", () => {
   });
 });
 
+describe("startServer authenticated auth origin setup", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadConfigMock.mockReturnValue(buildTestConfig());
+    createBetterAuthInstanceMock.mockReturnValue({});
+    deriveAuthTrustedOriginsMock.mockReturnValue([]);
+    process.env.BETTER_AUTH_SECRET = "test-secret";
+  });
+
+  it("derives trusted origins from the detected listen port before auth initializes", async () => {
+    loadConfigMock.mockReturnValue(buildTestConfig({
+      port: 3210,
+      allowedHostnames: ["board.example.test"],
+      authBaseUrlMode: "explicit",
+      authPublicBaseUrl: "http://127.0.0.1:3210",
+    }));
+    detectPortMock.mockResolvedValueOnce(3211);
+    deriveAuthTrustedOriginsMock.mockImplementation(
+      (_config: { port: number; authPublicBaseUrl?: string }, opts?: { listenPort?: number }) => [
+        `http://board.example.test:${opts?.listenPort ?? 0}`,
+      ],
+    );
+
+    await startServer();
+
+    expect(deriveAuthTrustedOriginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        port: 3210,
+        authPublicBaseUrl: "http://127.0.0.1:3211/",
+      }),
+      { listenPort: 3211 },
+    );
+    expect(createBetterAuthInstanceMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        port: 3210,
+        authPublicBaseUrl: "http://127.0.0.1:3211/",
+      }),
+      ["http://board.example.test:3211"],
+    );
+    expect(createAppMock.mock.calls[0]?.[1]).toMatchObject({
+      serverPort: 3211,
+    });
+  });
+});
+
 describe("startServer PAPERCLIP_API_URL handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    loadConfigMock.mockReturnValue(buildTestConfig());
     process.env.BETTER_AUTH_SECRET = "test-secret";
     delete process.env.PAPERCLIP_API_URL;
   });
@@ -236,5 +303,35 @@ describe("startServer PAPERCLIP_API_URL handling", () => {
 
     expect(started.apiUrl).toBe("http://127.0.0.1:3210");
     expect(process.env.PAPERCLIP_API_URL).toBe("http://127.0.0.1:3210");
+  });
+
+  it("rewrites explicit-port auth public URLs when detect-port selects a new port", async () => {
+    loadConfigMock.mockReturnValueOnce(buildTestConfig({
+      port: 3100,
+      authBaseUrlMode: "explicit",
+      authPublicBaseUrl: "http://my-host.ts.net:3100",
+    }));
+    detectPortMock.mockResolvedValueOnce(3110);
+
+    const started = await startServer();
+
+    expect(started.listenPort).toBe(3110);
+    expect(started.apiUrl).toBe("http://my-host.ts.net:3110");
+    expect(process.env.PAPERCLIP_RUNTIME_API_URL).toBe("http://my-host.ts.net:3110");
+  });
+
+  it("keeps no-port auth public URLs stable when detect-port selects a new port", async () => {
+    loadConfigMock.mockReturnValueOnce(buildTestConfig({
+      port: 3100,
+      authBaseUrlMode: "explicit",
+      authPublicBaseUrl: "https://paperclip.example",
+    }));
+    detectPortMock.mockResolvedValueOnce(3110);
+
+    const started = await startServer();
+
+    expect(started.listenPort).toBe(3110);
+    expect(started.apiUrl).toBe("https://paperclip.example");
+    expect(process.env.PAPERCLIP_RUNTIME_API_URL).toBe("https://paperclip.example");
   });
 });
