@@ -355,7 +355,7 @@ pnpm paperclipai worktree reseed \
 
 | Option | Description |
 |---|---|
-| `--start-point <ref>` | Remote ref to base the new branch on (e.g. `origin/main`) |
+| `--start-point <ref>` | Git ref or commit-ish to base the new branch on (e.g. `origin/main` or `deploy/default/...`) |
 | `--instance <id>` | Explicit isolated instance id |
 | `--home <path>` | Home root for worktree instances (default: `~/.paperclip-worktrees`) |
 | `--from-config <path>` | Source config.json to seed from |

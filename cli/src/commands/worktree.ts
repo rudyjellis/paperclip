@@ -456,7 +456,15 @@ function extractExecSyncErrorMessage(error: unknown): string | null {
 
 function localBranchExists(cwd: string, branchName: string): boolean {
   try {
-    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], {
+    return gitRefExists(cwd, `refs/heads/${branchName}`);
+  } catch {
+    return false;
+  }
+}
+
+function gitRefExists(cwd: string, refName: string): boolean {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", refName], {
       cwd,
       stdio: "ignore",
     });
@@ -464,6 +472,35 @@ function localBranchExists(cwd: string, branchName: string): boolean {
   } catch {
     return false;
   }
+}
+
+function gitRemoteExists(cwd: string, remoteName: string): boolean {
+  try {
+    execFileSync("git", ["remote", "get-url", remoteName], {
+      cwd,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveStartPointRemoteToFetch(cwd: string, startPoint?: string): string | null {
+  if (!startPoint || !startPoint.includes("/")) {
+    return null;
+  }
+  const [remoteName] = startPoint.split("/", 1);
+  if (!remoteName || !gitRemoteExists(cwd, remoteName)) {
+    return null;
+  }
+  if (
+    gitRefExists(cwd, `refs/heads/${startPoint}`)
+    || gitRefExists(cwd, `refs/tags/${startPoint}`)
+  ) {
+    return null;
+  }
+  return remoteName;
 }
 
 export function resolveGitWorktreeAddArgs(input: {
@@ -1514,16 +1551,16 @@ export async function worktreeMakeCommand(nameArg: string, opts: WorktreeMakeOpt
   }
 
   mkdirSync(path.dirname(targetPath), { recursive: true });
-  if (startPoint) {
-    const [remote] = startPoint.split("/", 1);
+  const fetchRemote = resolveStartPointRemoteToFetch(sourceCwd, startPoint);
+  if (fetchRemote) {
     try {
-      execFileSync("git", ["fetch", remote], {
+      execFileSync("git", ["fetch", fetchRemote], {
         cwd: sourceCwd,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
       throw new Error(
-        `Failed to fetch from remote "${remote}": ${extractExecSyncErrorMessage(error) ?? String(error)}`,
+        `Failed to fetch from remote "${fetchRemote}": ${extractExecSyncErrorMessage(error) ?? String(error)}`,
       );
     }
   }
@@ -3250,7 +3287,7 @@ export function registerWorktreeCommands(program: Command): void {
     .command("worktree:make")
     .description("Create ~/NAME as a git worktree, then initialize an isolated Paperclip instance inside it")
     .argument("<name>", "Worktree name — auto-prefixed with paperclip- if needed (created at ~/paperclip-NAME)")
-    .option("--start-point <ref>", "Remote ref to base the new branch on (env: PAPERCLIP_WORKTREE_START_POINT)")
+    .option("--start-point <ref>", "Git ref or commit-ish to base the new branch on (env: PAPERCLIP_WORKTREE_START_POINT)")
     .option("--instance <id>", "Explicit isolated instance id")
     .option("--home <path>", `Home root for worktree instances (env: PAPERCLIP_WORKTREES_DIR, default: ${DEFAULT_WORKTREE_HOME})`)
     .option("--from-config <path>", "Source config.json to seed from")
