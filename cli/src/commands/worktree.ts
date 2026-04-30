@@ -215,6 +215,10 @@ function isCurrentSourceConfigPath(sourceConfigPath: string): boolean {
   return path.resolve(currentConfigPath) === path.resolve(sourceConfigPath);
 }
 
+function resolveEmbeddedPostgresDataDir(dataDir: string, configPath: string): string {
+  return resolveRuntimeLikePath(dataDir, configPath);
+}
+
 function formatSeededWorktreeExecutionQuarantineSummary(
   summary: SeededWorktreeExecutionQuarantineSummary,
 ): string {
@@ -1349,7 +1353,10 @@ async function seedWorktreeDatabase(input: {
   try {
     if (input.sourceConfig.database.mode === "embedded-postgres") {
       sourceHandle = await ensureEmbeddedPostgres(
-        input.sourceConfig.database.embeddedPostgresDataDir,
+        resolveEmbeddedPostgresDataDir(
+          input.sourceConfig.database.embeddedPostgresDataDir,
+          input.sourceConfigPath,
+        ),
         input.sourceConfig.database.embeddedPostgresPort,
       );
       const sourceAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${sourceHandle.port}/postgres`;
@@ -1373,7 +1380,10 @@ async function seedWorktreeDatabase(input: {
     });
 
     targetHandle = await ensureEmbeddedPostgres(
-      input.targetConfig.database.embeddedPostgresDataDir,
+      resolveEmbeddedPostgresDataDir(
+        input.targetConfig.database.embeddedPostgresDataDir,
+        input.targetPaths.configPath,
+      ),
       input.targetConfig.database.embeddedPostgresPort,
     );
 
@@ -1982,7 +1992,7 @@ async function openConfiguredDb(configPath: string): Promise<OpenDbHandle> {
   try {
     if (config.database.mode === "embedded-postgres") {
       embeddedHandle = await ensureEmbeddedPostgres(
-        config.database.embeddedPostgresDataDir,
+        resolveEmbeddedPostgresDataDir(config.database.embeddedPostgresDataDir, configPath),
         config.database.embeddedPostgresPort,
       );
     }
@@ -2165,11 +2175,16 @@ function renderMergePlan(plan: Awaited<ReturnType<typeof collectMergePlan>>["pla
   return lines.join("\n");
 }
 
-function resolveRunningEmbeddedPostgresPid(config: PaperclipConfig): number | null {
+function resolveRunningEmbeddedPostgresPid(config: PaperclipConfig, configPath: string): number | null {
   if (config.database.mode !== "embedded-postgres") {
     return null;
   }
-  return readRunningPostmasterPid(path.resolve(config.database.embeddedPostgresDataDir, "postmaster.pid"));
+  return readRunningPostmasterPid(
+    path.resolve(
+      resolveEmbeddedPostgresDataDir(config.database.embeddedPostgresDataDir, configPath),
+      "postmaster.pid",
+    ),
+  );
 }
 
 async function collectMergePlan(input: {
@@ -3144,7 +3159,7 @@ async function runWorktreeReseed(opts: WorktreeReseedOptions): Promise<void> {
     configPath: targetEndpoint.configPath,
     rootPath: targetEndpoint.rootPath,
   });
-  const runningTargetPid = resolveRunningEmbeddedPostgresPid(targetConfig);
+  const runningTargetPid = resolveRunningEmbeddedPostgresPid(targetConfig, target.configPath);
   if (runningTargetPid && !opts.allowLiveTarget) {
     throw new Error(
       `Target worktree database appears to be running (pid ${runningTargetPid}). Stop Paperclip in ${targetEndpoint.rootPath} before reseeding, or re-run with --allow-live-target if you want to override this guard.`,
