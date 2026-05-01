@@ -1378,6 +1378,7 @@ function shouldAutoCheckoutIssueForWake(input: {
   if (!wakeReason) return false;
   if (wakeReason === "issue_comment_mentioned") return false;
   if (wakeReason.startsWith("execution_")) return false;
+  if (issueStatus === "blocked" && wakeReason === "issue_commented") return false;
 
   return true;
 }
@@ -3606,8 +3607,18 @@ export function heartbeatService(db: Db) {
 
     // Fix A (lazy locking): stamp executionRunId now that the run is actually running,
     // not at queue time. Guard is idempotent — safe if called more than once.
-    const claimedIssueId = readNonEmptyString(parseObject(claimed.contextSnapshot).issueId);
-    if (claimedIssueId) {
+    const claimedContext = parseObject(claimed.contextSnapshot);
+    const claimedIssueId = readNonEmptyString(claimedContext.issueId);
+    const claimedIssueContext = claimedIssueId
+      ? await getIssueExecutionContext(claimed.companyId, claimedIssueId)
+      : null;
+    if (
+      claimedIssueId &&
+      !(
+        claimedIssueContext?.status === "blocked" &&
+        readNonEmptyString(claimedContext.wakeReason) === "issue_commented"
+      )
+    ) {
       const claimedAgent = await getAgent(claimed.agentId);
       await db
         .update(issues)
