@@ -13,6 +13,7 @@ import {
   instanceSettings,
   issueComments,
   issueInboxArchives,
+  issueThreadInteractions,
   issueRelations,
   issues,
   projectWorkspaces,
@@ -73,6 +74,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
 
   afterEach(async () => {
     await db.delete(issueComments);
+    await db.delete(issueThreadInteractions);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
     await db.delete(activityLog);
@@ -1091,6 +1093,7 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
 
   afterEach(async () => {
     await db.delete(issueComments);
+    await db.delete(issueThreadInteractions);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
     await db.delete(activityLog);
@@ -1467,6 +1470,7 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
 
   afterEach(async () => {
     await db.delete(issueComments);
+    await db.delete(issueThreadInteractions);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
     await db.delete(activityLog);
@@ -1676,6 +1680,80 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
       allBlockersDone: true,
       isDependencyReady: true,
     });
+  });
+
+  it("counts pending interactions separately from dependency blockers", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const blockedId = randomUUID();
+    await db.insert(issues).values({
+      id: blockedId,
+      companyId,
+      title: "Blocked on human follow-up",
+      status: "blocked",
+      priority: "medium",
+    });
+
+    await db.insert(issueThreadInteractions).values([
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: blockedId,
+        kind: "ask_user_questions",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        payload: {
+          version: 1,
+          questions: [
+            {
+              id: "operator-choice",
+              prompt: "Which option should we take?",
+              selectionMode: "single",
+              options: [{ id: "option-a", label: "Option A" }],
+            },
+          ],
+        },
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: blockedId,
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee_on_accept",
+        payload: {
+          version: 1,
+          prompt: "Approve the recovery plan?",
+        },
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: blockedId,
+        kind: "request_confirmation",
+        status: "accepted",
+        continuationPolicy: "wake_assignee_on_accept",
+        payload: {
+          version: 1,
+          prompt: "Historical interaction that should not count",
+        },
+      },
+    ]);
+
+    await expect(svc.getDependencyReadiness(blockedId)).resolves.toMatchObject({
+      issueId: blockedId,
+      unresolvedBlockerCount: 0,
+      isDependencyReady: true,
+    });
+
+    const counts = await svc.listPendingInteractionCounts(companyId, [blockedId]);
+    expect(counts.get(blockedId)).toBe(2);
   });
 
   it("rejects execution when unresolved blockers remain", async () => {
