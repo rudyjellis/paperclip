@@ -261,6 +261,8 @@ export interface Issue {
   hiddenAt: Date | null;
   labelIds?: string[];
   labels?: IssueLabel[];
+  parent?: IssueRelationIssueSummary | null;
+  children?: IssueRelationIssueSummary[];
   blockedBy?: IssueRelationIssueSummary[];
   blocks?: IssueRelationIssueSummary[];
   blockerAttention?: IssueBlockerAttention;

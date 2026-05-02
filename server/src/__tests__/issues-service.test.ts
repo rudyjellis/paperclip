@@ -1182,6 +1182,9 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
       mode: "isolated_workspace",
       workspaceRuntime: { profile: "agent" },
     });
+
+    const children = await svc.list(companyId, { parentId: parentIssueId });
+    expect(children.map((issue) => issue.id)).toEqual([child.id]);
   });
 
   it("keeps explicit workspace fields instead of inheriting the parent linkage", async () => {
