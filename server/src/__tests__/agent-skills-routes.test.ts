@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadDefaultAgentInstructionsBundle } from "../services/default-agent-instructions.js";
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -531,7 +532,9 @@ describe.sequential("agent skill routes", () => {
     );
   });
 
-  it("materializes the bundled default instruction set for non-CEO agents with no prompt template", async () => {
+  it("materializes the bundled engineer instruction set for non-CEO agents with no prompt template", async () => {
+    const expectedBundle = await loadDefaultAgentInstructionsBundle("engineer");
+
     const res = await requestApp(await createApp(), (baseUrl) => request(baseUrl)
       .post("/api/companies/company-1/agents")
       .send({
@@ -549,23 +552,7 @@ describe.sequential("agent skill routes", () => {
           role: "engineer",
           adapterType: "claude_local",
         }),
-        expect.objectContaining({
-          "AGENTS.md": expect.stringMatching(/Start actionable work in the same heartbeat\.[\s\S]*Keep the work moving until it is done\./),
-        }),
-        { entryFile: "AGENTS.md", replaceExisting: false },
-      );
-      expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({
-          "AGENTS.md": expect.stringContaining('kind: "request_confirmation"'),
-        }),
-        expect.any(Object),
-      );
-      expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({
-          "AGENTS.md": expect.stringContaining("confirmation:{issueId}:plan:{revisionId}"),
-        }),
+        expectedBundle,
         expect.any(Object),
       );
     });

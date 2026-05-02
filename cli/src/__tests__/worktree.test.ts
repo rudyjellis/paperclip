@@ -1458,6 +1458,7 @@ describe("worktree helpers", () => {
       const sourceHooksDir = path.join(repoRoot, ".git", "hooks");
       const sourceHookPath = path.join(sourceHooksDir, "pre-commit");
       const sourceTokensPath = path.join(sourceHooksDir, "forbidden-tokens.txt");
+      execFileSync("git", ["config", "core.hooksPath", sourceHooksDir], { cwd: repoRoot, stdio: "ignore" });
       fs.writeFileSync(sourceHookPath, "#!/usr/bin/env bash\nexit 0\n", { encoding: "utf8", mode: 0o755 });
       fs.chmodSync(sourceHookPath, 0o755);
       fs.writeFileSync(sourceTokensPath, "secret-token\n", "utf8");
