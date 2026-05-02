@@ -5,6 +5,7 @@ import {
   agents,
   agentRuntimeState,
   agentWakeupRequests,
+  activityLog,
   companies,
   companySkills,
   costEvents,
@@ -92,6 +93,7 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     unregisterServerAdapter(TEST_ADAPTER_TYPE);
     await db.delete(costEvents);
     await db.delete(heartbeatRunEvents);
+    await db.delete(activityLog);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(agentRuntimeState);
