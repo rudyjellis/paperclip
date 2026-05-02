@@ -1127,9 +1127,19 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    const [{ project, goal }, ancestors, mentionedProjectIds, documentPayload, relations, blockerAttention, referenceSummary] = await Promise.all([
+    const [
+      { project, goal },
+      ancestors,
+      childIssues,
+      mentionedProjectIds,
+      documentPayload,
+      relations,
+      blockerAttention,
+      referenceSummary,
+    ] = await Promise.all([
       resolveIssueProjectAndGoal(issue),
       svc.getAncestors(issue.id),
+      svc.list(issue.companyId, { parentId: issue.id }),
       svc.findMentionedProjectIds(issue.id, { includeCommentBodies: false }),
       documentsSvc.getIssueDocumentPayload(issue),
       svc.getRelationSummaries(issue.id),
@@ -1143,10 +1153,33 @@ export function issueRoutes(
       ? await executionWorkspacesSvc.getById(issue.executionWorkspaceId)
       : null;
     const workProducts = await workProductsSvc.listForIssue(issue.id);
+    const parent = issue.parentId
+      ? ancestors.find((ancestor) => ancestor.id === issue.parentId) ?? null
+      : null;
     res.json({
       ...issue,
       goalId: goal?.id ?? issue.goalId,
       ancestors,
+      parent: parent
+        ? {
+            id: parent.id,
+            identifier: parent.identifier,
+            title: parent.title,
+            status: parent.status,
+            priority: parent.priority,
+            assigneeAgentId: parent.assigneeAgentId,
+            assigneeUserId: parent.assigneeUserId,
+          }
+        : null,
+      children: childIssues.map((child) => ({
+        id: child.id,
+        identifier: child.identifier,
+        title: child.title,
+        status: child.status,
+        priority: child.priority,
+        assigneeAgentId: child.assigneeAgentId,
+        assigneeUserId: child.assigneeUserId,
+      })),
       ...(blockerAttention ? { blockerAttention } : {}),
       blockedBy: relations.blockedBy,
       blocks: relations.blocks,

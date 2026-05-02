@@ -77,6 +77,38 @@ async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 
   throw new Error("Timed out waiting for condition");
 }
 
+async function waitForFailedRunToFullyDrain(
+  db: ReturnType<typeof createDb>,
+  agentId: string,
+  runId: string,
+) {
+  await waitFor(async () => {
+    const [runRow, agentRow, wakeup] = await Promise.all([
+      db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, runId))
+        .then((rows) => rows[0] ?? null),
+      db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .then((rows) => rows[0] ?? null),
+      db
+        .select()
+        .from(agentWakeupRequests)
+        .where(eq(agentWakeupRequests.runId, runId))
+        .then((rows) => rows[0] ?? null),
+    ]);
+
+    return runRow?.status === "failed"
+      && Boolean(runRow.finishedAt)
+      && wakeup?.status === "failed"
+      && Boolean(wakeup.finishedAt)
+      && agentRow?.status === "error";
+  });
+}
+
 describeEmbeddedPostgres("heartbeat redaction", () => {
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
@@ -90,14 +122,6 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     vi.clearAllMocks();
     mockWorkspaceRuntime.setupFailureMessage = null;
     unregisterServerAdapter(TEST_ADAPTER_TYPE);
-    await db.delete(costEvents);
-    await db.delete(heartbeatRunEvents);
-    await db.delete(heartbeatRuns);
-    await db.delete(agentWakeupRequests);
-    await db.delete(agentRuntimeState);
-    await db.delete(agents);
-    await db.delete(companySkills);
-    await db.delete(companies);
   });
 
   afterAll(async () => {
@@ -171,14 +195,7 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     });
     expect(run).not.toBeNull();
 
-    await waitFor(async () => {
-      const state = await db
-        .select()
-        .from(agentRuntimeState)
-        .where(eq(agentRuntimeState.agentId, agentId))
-        .then((rows) => rows[0] ?? null);
-      return state?.lastRunStatus === "failed";
-    });
+    await waitForFailedRunToFullyDrain(db, agentId, run!.id);
 
     const state = await db
       .select()
@@ -275,14 +292,7 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     });
     expect(run).not.toBeNull();
 
-    await waitFor(async () => {
-      const runRow = await db
-        .select()
-        .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.id, run!.id))
-        .then((rows) => rows[0] ?? null);
-      return runRow?.status === "failed";
-    });
+    await waitForFailedRunToFullyDrain(db, agentId, run!.id);
 
     const runRow = await db
       .select()

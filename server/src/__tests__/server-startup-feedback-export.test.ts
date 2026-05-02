@@ -1,4 +1,30 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const originalRuntimeApiEnv = {
+  PAPERCLIP_API_URL: process.env.PAPERCLIP_API_URL,
+  PAPERCLIP_RUNTIME_API_URL: process.env.PAPERCLIP_RUNTIME_API_URL,
+  PAPERCLIP_RUNTIME_API_CANDIDATES_JSON: process.env.PAPERCLIP_RUNTIME_API_CANDIDATES_JSON,
+  PAPERCLIP_LISTEN_HOST: process.env.PAPERCLIP_LISTEN_HOST,
+  PAPERCLIP_LISTEN_PORT: process.env.PAPERCLIP_LISTEN_PORT,
+};
+
+function resetRuntimeApiEnv() {
+  delete process.env.PAPERCLIP_API_URL;
+  delete process.env.PAPERCLIP_RUNTIME_API_URL;
+  delete process.env.PAPERCLIP_RUNTIME_API_CANDIDATES_JSON;
+  delete process.env.PAPERCLIP_LISTEN_HOST;
+  delete process.env.PAPERCLIP_LISTEN_PORT;
+}
+
+function restoreRuntimeApiEnv() {
+  for (const [key, value] of Object.entries(originalRuntimeApiEnv)) {
+    if (value === undefined) {
+      delete process.env[key];
+      continue;
+    }
+    process.env[key] = value;
+  }
+}
 
 const {
   acquireInstanceServerLockMock,
@@ -203,6 +229,10 @@ vi.mock("../auth/better-auth.js", () => ({
 
 import { startServer } from "../index.ts";
 
+afterEach(() => {
+  restoreRuntimeApiEnv();
+});
+
 describe("startServer feedback export wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -210,6 +240,7 @@ describe("startServer feedback export wiring", () => {
     createBetterAuthInstanceMock.mockReturnValue({});
     deriveAuthTrustedOriginsMock.mockReturnValue([]);
     process.env.BETTER_AUTH_SECRET = "test-secret";
+    resetRuntimeApiEnv();
   });
 
   it("passes the feedback export service into createApp so pending traces flush in runtime", async () => {
@@ -242,6 +273,7 @@ describe("startServer authenticated auth origin setup", () => {
     createBetterAuthInstanceMock.mockReturnValue({});
     deriveAuthTrustedOriginsMock.mockReturnValue([]);
     process.env.BETTER_AUTH_SECRET = "test-secret";
+    resetRuntimeApiEnv();
   });
 
   it("derives trusted origins from the detected listen port before auth initializes", async () => {
@@ -286,7 +318,7 @@ describe("startServer PAPERCLIP_API_URL handling", () => {
     vi.clearAllMocks();
     loadConfigMock.mockReturnValue(buildTestConfig());
     process.env.BETTER_AUTH_SECRET = "test-secret";
-    delete process.env.PAPERCLIP_API_URL;
+    resetRuntimeApiEnv();
   });
 
   it("uses the externally set PAPERCLIP_API_URL when provided", async () => {

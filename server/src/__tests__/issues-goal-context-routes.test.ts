@@ -7,6 +7,7 @@ import { issueRoutes } from "../routes/issues.js";
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   getAncestors: vi.fn(),
+  list: vi.fn(),
   getRelationSummaries: vi.fn(),
   findMentionedProjectIds: vi.fn(),
   getCommentCursor: vi.fn(),
@@ -168,6 +169,7 @@ describe.sequential("issue goal context routes", () => {
     vi.clearAllMocks();
     mockIssueService.getById.mockResolvedValue(legacyProjectLinkedIssue);
     mockIssueService.getAncestors.mockResolvedValue([]);
+    mockIssueService.list.mockResolvedValue([]);
     mockIssueService.getRelationSummaries.mockResolvedValue({ blockedBy: [], blocks: [] });
     mockIssueService.findMentionedProjectIds.mockResolvedValue([]);
     mockIssueService.getCommentCursor.mockResolvedValue({
@@ -237,6 +239,96 @@ describe.sequential("issue goal context routes", () => {
       { includeCommentBodies: false },
     );
     expect(mockGoalService.getDefaultCompanyGoal).not.toHaveBeenCalled();
+  });
+
+  it("hydrates the immediate parent and direct children on GET /issues/:id", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      ...legacyProjectLinkedIssue,
+      parentId: "99999999-9999-4999-8999-999999999999",
+      assigneeUserId: "board-user-1",
+    });
+    mockIssueService.getAncestors.mockResolvedValue([
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        identifier: "PAP-580",
+        title: "Parent issue",
+        description: null,
+        status: "in_progress",
+        priority: "high",
+        assigneeAgentId: "agent-parent",
+        assigneeUserId: null,
+        projectId: legacyProjectLinkedIssue.projectId,
+        goalId: projectGoal.id,
+        project: null,
+        goal: null,
+      },
+    ]);
+    mockIssueService.list.mockResolvedValue([
+      {
+        id: "child-1",
+        companyId: "company-1",
+        projectId: legacyProjectLinkedIssue.projectId,
+        projectWorkspaceId: null,
+        goalId: null,
+        parentId: legacyProjectLinkedIssue.id,
+        title: "Child issue",
+        description: null,
+        status: "todo",
+        priority: "low",
+        assigneeAgentId: null,
+        assigneeUserId: "board-user-2",
+        checkoutRunId: null,
+        executionRunId: null,
+        executionAgentNameKey: null,
+        executionLockedAt: null,
+        createdByAgentId: null,
+        createdByUserId: null,
+        issueNumber: 582,
+        identifier: "PAP-582",
+        originKind: undefined,
+        originId: null,
+        originRunId: null,
+        originFingerprint: null,
+        requestDepth: 0,
+        billingCode: null,
+        assigneeAdapterOverrides: null,
+        executionPolicy: null,
+        executionState: null,
+        executionWorkspaceId: null,
+        executionWorkspacePreference: null,
+        executionWorkspaceSettings: null,
+        startedAt: null,
+        completedAt: null,
+        cancelledAt: null,
+        hiddenAt: null,
+        labels: [],
+        labelIds: [],
+        createdAt: new Date("2026-03-24T12:00:00Z"),
+        updatedAt: new Date("2026-03-24T12:05:00Z"),
+      },
+    ]);
+
+    const res = await request(createApp()).get("/api/issues/11111111-1111-4111-8111-111111111111");
+
+    expect(res.status).toBe(200);
+    expect(mockIssueService.list).toHaveBeenCalledWith(
+      "company-1",
+      { parentId: "11111111-1111-4111-8111-111111111111" },
+    );
+    expect(res.body.parent).toEqual(expect.objectContaining({
+      id: "99999999-9999-4999-8999-999999999999",
+      identifier: "PAP-580",
+      title: "Parent issue",
+      priority: "high",
+    }));
+    expect(res.body.children).toEqual([
+      expect.objectContaining({
+        id: "child-1",
+        identifier: "PAP-582",
+        title: "Child issue",
+        assigneeUserId: "board-user-2",
+      }),
+    ]);
   });
 
   it("surfaces the project goal from GET /issues/:id/heartbeat-context", async () => {
