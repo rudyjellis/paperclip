@@ -3159,7 +3159,7 @@ async function runWorktreeReseed(opts: WorktreeReseedOptions): Promise<void> {
     configPath: targetEndpoint.configPath,
     rootPath: targetEndpoint.rootPath,
   });
-  const runningTargetPid = resolveRunningEmbeddedPostgresPid(targetConfig, target.configPath);
+  const runningTargetPid = resolveRunningEmbeddedPostgresPid(targetConfig, targetEndpoint.configPath);
   if (runningTargetPid && !opts.allowLiveTarget) {
     throw new Error(
       `Target worktree database appears to be running (pid ${runningTargetPid}). Stop Paperclip in ${targetEndpoint.rootPath} before reseeding, or re-run with --allow-live-target if you want to override this guard.`,
