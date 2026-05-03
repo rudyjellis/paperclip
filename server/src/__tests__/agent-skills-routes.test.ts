@@ -550,7 +550,8 @@ describe.sequential("agent skill routes", () => {
           adapterType: "claude_local",
         }),
         expect.objectContaining({
-          "AGENTS.md": expect.stringMatching(/Start actionable work in the same heartbeat\.[\s\S]*Keep the work moving until it is done\./),
+          "AGENTS.md": expect.stringContaining("## @senior-engineer"),
+          "SOUL.md": expect.stringContaining("# SOUL.md -- Engineering Persona"),
         }),
         { entryFile: "AGENTS.md", replaceExisting: false },
       );

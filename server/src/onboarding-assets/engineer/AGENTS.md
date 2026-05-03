@@ -77,6 +77,8 @@ For anything beyond a straightforward fix:
 
 - Comment progress as you go — concise markdown: status line + bullets.
 - When done, update status and leave a closing comment: what changed, how to verify, any follow-ups.
+- If the board/user needs to choose suggested tasks, answer structured questions, or confirm a proposal, create an issue-thread interaction on the current issue with `POST /api/issues/{issueId}/interactions` using `kind: "suggest_tasks"`, `kind: "ask_user_questions"`, or `kind: "request_confirmation"`.
+- Use `request_confirmation` instead of asking for yes/no decisions in markdown. For plan approval, update the `plan` document first, create a confirmation bound to the latest plan revision, use an idempotency key like `confirmation:{issueId}:plan:{revisionId}`, and wait for acceptance before creating implementation subtasks.
 - Always include `X-Paperclip-Run-Id` header on all mutating API calls.
 - Always comment on `in_progress` work before exiting a heartbeat.
 
