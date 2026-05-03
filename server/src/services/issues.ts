@@ -285,6 +285,42 @@ async function listIssueDependencyReadinessMap(
   return readinessMap;
 }
 
+async function listIssuePendingInteractionCountMap(
+  dbOrTx: Pick<Db, "select">,
+  companyId: string,
+  issueIds: string[],
+) {
+  const uniqueIssueIds = [...new Set(issueIds.filter(Boolean))];
+  const countMap = new Map<string, number>();
+  for (const issueId of uniqueIssueIds) {
+    countMap.set(issueId, 0);
+  }
+  if (uniqueIssueIds.length === 0) return countMap;
+
+  for (const issueIdChunk of chunkList(uniqueIssueIds, ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE)) {
+    const rows = await dbOrTx
+      .select({
+        issueId: issueThreadInteractions.issueId,
+        pendingInteractionCount: sql<number>`count(*)::int`,
+      })
+      .from(issueThreadInteractions)
+      .where(
+        and(
+          eq(issueThreadInteractions.companyId, companyId),
+          eq(issueThreadInteractions.status, "pending"),
+          inArray(issueThreadInteractions.issueId, issueIdChunk),
+        ),
+      )
+      .groupBy(issueThreadInteractions.issueId);
+
+    for (const row of rows) {
+      countMap.set(row.issueId, row.pendingInteractionCount);
+    }
+  }
+
+  return countMap;
+}
+
 async function listUnresolvedBlockerIssueIds(
   dbOrTx: Pick<Db, "select">,
   companyId: string,
@@ -2282,6 +2318,10 @@ export function issueService(db: Db) {
 
     listDependencyReadiness: async (companyId: string, issueIds: string[], dbOrTx: any = db) => {
       return listIssueDependencyReadinessMap(dbOrTx, companyId, issueIds);
+    },
+
+    listPendingInteractionCounts: async (companyId: string, issueIds: string[], dbOrTx: any = db) => {
+      return listIssuePendingInteractionCountMap(dbOrTx, companyId, issueIds);
     },
 
     listBlockerAttention: async (

@@ -5676,9 +5676,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
           : outcome === "succeeded"
             ? null
-            : redactCurrentUserText(
-                adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
-                currentUserRedactionOptions,
+            : redactRunLogCredentialsText(
+                redactCurrentUserText(
+                  adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
+                  currentUserRedactionOptions,
+                ),
               );
       const runErrorCode =
         outcome === "timed_out"

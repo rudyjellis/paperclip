@@ -1262,23 +1262,35 @@ export function agentRoutes(
       req.actor.companyId,
       rows.map((issue) => issue.id),
     );
+    const pendingInteractionCounts = await issuesSvc.listPendingInteractionCounts(
+      req.actor.companyId,
+      rows.map((issue) => issue.id),
+    );
 
     res.json(
-      rows.map((issue) => ({
-        id: issue.id,
-        identifier: issue.identifier,
-        title: issue.title,
-        status: issue.status,
-        priority: issue.priority,
-        projectId: issue.projectId,
-        goalId: issue.goalId,
-        parentId: issue.parentId,
-        updatedAt: issue.updatedAt,
-        activeRun: issue.activeRun,
-        dependencyReady: dependencyReadiness.get(issue.id)?.isDependencyReady ?? true,
-        unresolvedBlockerCount: dependencyReadiness.get(issue.id)?.unresolvedBlockerCount ?? 0,
-        unresolvedBlockerIssueIds: dependencyReadiness.get(issue.id)?.unresolvedBlockerIssueIds ?? [],
-      })),
+      rows.map((issue) => {
+        const readiness = dependencyReadiness.get(issue.id);
+        const pendingInteractionCount = pendingInteractionCounts.get(issue.id) ?? 0;
+        const interactionBlocked = pendingInteractionCount > 0;
+
+        return {
+          id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          status: issue.status,
+          priority: issue.priority,
+          projectId: issue.projectId,
+          goalId: issue.goalId,
+          parentId: issue.parentId,
+          updatedAt: issue.updatedAt,
+          activeRun: issue.activeRun,
+          dependencyReady: (readiness?.isDependencyReady ?? true) && !interactionBlocked,
+          unresolvedBlockerCount: readiness?.unresolvedBlockerCount ?? 0,
+          unresolvedBlockerIssueIds: readiness?.unresolvedBlockerIssueIds ?? [],
+          pendingInteractionCount,
+          interactionBlocked,
+        };
+      }),
     );
   });
 

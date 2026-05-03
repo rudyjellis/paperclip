@@ -72,6 +72,8 @@ const mockIssueApprovalService = vi.hoisted(() => ({
 
 const mockIssueService = vi.hoisted(() => ({
   list: vi.fn(),
+  listDependencyReadiness: vi.fn(),
+  listPendingInteractionCounts: vi.fn(),
 }));
 
 const mockSecretService = vi.hoisted(() => ({
@@ -308,6 +310,8 @@ describe.sequential("agent permission routes", () => {
     mockHeartbeatService.cancelRun.mockReset();
     mockIssueApprovalService.linkManyForApproval.mockReset();
     mockIssueService.list.mockReset();
+    mockIssueService.listDependencyReadiness.mockReset();
+    mockIssueService.listPendingInteractionCounts.mockReset();
     mockSecretService.normalizeAdapterConfigForPersistence.mockReset();
     mockSecretService.resolveAdapterConfigForRuntime.mockReset();
     mockAgentInstructionsService.materializeManagedBundle.mockReset();
@@ -351,6 +355,8 @@ describe.sequential("agent permission routes", () => {
     mockCompanySkillService.listRuntimeSkillEntries.mockResolvedValue([]);
     mockCompanySkillService.resolveRequestedSkillKeys.mockImplementation(async (_companyId, requested) => requested);
     mockBudgetService.upsertPolicy.mockResolvedValue(undefined);
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map());
+    mockIssueService.listPendingInteractionCounts.mockResolvedValue(new Map());
     mockAgentInstructionsService.materializeManagedBundle.mockImplementation(
       async (agent: Record<string, unknown>, files: Record<string, string>) => ({
         bundle: null,
@@ -1171,6 +1177,65 @@ describe.sequential("agent permission routes", () => {
       status: "backlog,todo,in_progress,in_review,blocked,done",
       limit: 500,
     });
+  });
+
+  it("marks inbox-lite issues as blocked when pending interactions are unresolved", async () => {
+    mockIssueService.list.mockResolvedValue([
+      {
+        id: "issue-1",
+        identifier: "PAP-1054",
+        title: "Interaction-blocked issue",
+        status: "blocked",
+        priority: "high",
+        projectId: "project-1",
+        goalId: "goal-1",
+        parentId: "parent-1",
+        updatedAt: "2026-05-02T20:30:00.000Z",
+        activeRun: null,
+      },
+    ]);
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map([
+      ["issue-1", {
+        issueId: "issue-1",
+        blockerIssueIds: [],
+        unresolvedBlockerIssueIds: [],
+        unresolvedBlockerCount: 0,
+        allBlockersDone: true,
+        isDependencyReady: true,
+      }],
+    ]));
+    mockIssueService.listPendingInteractionCounts.mockResolvedValue(new Map([["issue-1", 2]]));
+
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: "run-1",
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/agents/me/inbox-lite"));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({
+        id: "issue-1",
+        identifier: "PAP-1054",
+        dependencyReady: false,
+        unresolvedBlockerCount: 0,
+        unresolvedBlockerIssueIds: [],
+        pendingInteractionCount: 2,
+        interactionBlocked: true,
+      }),
+    ]);
+    expect(mockIssueService.list).toHaveBeenCalledWith(companyId, {
+      assigneeAgentId: agentId,
+      status: "todo,in_progress,blocked",
+      includeRoutineExecutions: true,
+      limit: 500,
+    });
+    expect(mockIssueService.listDependencyReadiness).toHaveBeenCalledWith(companyId, ["issue-1"]);
+    expect(mockIssueService.listPendingInteractionCounts).toHaveBeenCalledWith(companyId, ["issue-1"]);
   });
 
   it("rejects heartbeat cancellation outside the caller company scope", async () => {
