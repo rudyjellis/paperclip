@@ -1264,21 +1264,31 @@ export function agentRoutes(
     );
 
     res.json(
-      rows.map((issue) => ({
-        id: issue.id,
-        identifier: issue.identifier,
-        title: issue.title,
-        status: issue.status,
-        priority: issue.priority,
-        projectId: issue.projectId,
-        goalId: issue.goalId,
-        parentId: issue.parentId,
-        updatedAt: issue.updatedAt,
-        activeRun: issue.activeRun,
-        dependencyReady: dependencyReadiness.get(issue.id)?.isDependencyReady ?? true,
-        unresolvedBlockerCount: dependencyReadiness.get(issue.id)?.unresolvedBlockerCount ?? 0,
-        unresolvedBlockerIssueIds: dependencyReadiness.get(issue.id)?.unresolvedBlockerIssueIds ?? [],
-      })),
+      rows.map((issue) => {
+        const readiness = dependencyReadiness.get(issue.id);
+        const activeChildBlocked = issue.status === "blocked"
+          && issue.blockerAttention?.state === "covered"
+          && issue.blockerAttention.reason === "active_child";
+        const unresolvedBlockerCount = activeChildBlocked
+          ? Math.max(readiness?.unresolvedBlockerCount ?? 0, issue.blockerAttention?.unresolvedBlockerCount ?? 0)
+          : (readiness?.unresolvedBlockerCount ?? 0);
+
+        return {
+          id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          status: issue.status,
+          priority: issue.priority,
+          projectId: issue.projectId,
+          goalId: issue.goalId,
+          parentId: issue.parentId,
+          updatedAt: issue.updatedAt,
+          activeRun: issue.activeRun,
+          dependencyReady: (readiness?.isDependencyReady ?? true) && !activeChildBlocked,
+          unresolvedBlockerCount,
+          unresolvedBlockerIssueIds: readiness?.unresolvedBlockerIssueIds ?? [],
+        };
+      }),
     );
   });
 

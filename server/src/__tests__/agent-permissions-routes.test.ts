@@ -72,6 +72,7 @@ const mockIssueApprovalService = vi.hoisted(() => ({
 
 const mockIssueService = vi.hoisted(() => ({
   list: vi.fn(),
+  listDependencyReadiness: vi.fn(),
 }));
 
 const mockSecretService = vi.hoisted(() => ({
@@ -308,6 +309,7 @@ describe.sequential("agent permission routes", () => {
     mockHeartbeatService.cancelRun.mockReset();
     mockIssueApprovalService.linkManyForApproval.mockReset();
     mockIssueService.list.mockReset();
+    mockIssueService.listDependencyReadiness.mockReset();
     mockSecretService.normalizeAdapterConfigForPersistence.mockReset();
     mockSecretService.resolveAdapterConfigForRuntime.mockReset();
     mockAgentInstructionsService.materializeManagedBundle.mockReset();
@@ -373,6 +375,7 @@ describe.sequential("agent permission routes", () => {
     mockInstanceSettingsService.getGeneral.mockResolvedValue({
       censorUsernameInLogs: false,
     });
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map());
     mockLogActivity.mockResolvedValue(undefined);
   });
 
@@ -1171,6 +1174,71 @@ describe.sequential("agent permission routes", () => {
       status: "backlog,todo,in_progress,in_review,blocked,done",
       limit: 500,
     });
+  });
+
+  it("marks active-child blocked parents as not ready in inbox-lite", async () => {
+    mockIssueService.list.mockResolvedValue([
+      {
+        id: "issue-1",
+        identifier: "PAP-1338",
+        title: "Blocked parent",
+        status: "blocked",
+        priority: "high",
+        projectId: "project-1",
+        goalId: "goal-1",
+        parentId: null,
+        updatedAt: "2026-05-21T17:00:00.000Z",
+        activeRun: null,
+        blockerAttention: {
+          state: "covered",
+          reason: "active_child",
+          unresolvedBlockerCount: 1,
+          coveredBlockerCount: 1,
+          stalledBlockerCount: 0,
+          attentionBlockerCount: 0,
+          sampleBlockerIdentifier: "PAP-1339",
+          sampleStalledBlockerIdentifier: null,
+        },
+      },
+    ]);
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map([
+      ["issue-1", {
+        issueId: "issue-1",
+        blockerIssueIds: [],
+        unresolvedBlockerIssueIds: [],
+        unresolvedBlockerCount: 0,
+        allBlockersDone: true,
+        isDependencyReady: true,
+      }],
+    ]));
+
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: "run-1",
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/agents/me/inbox-lite"));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({
+        id: "issue-1",
+        identifier: "PAP-1338",
+        dependencyReady: false,
+        unresolvedBlockerCount: 1,
+        unresolvedBlockerIssueIds: [],
+      }),
+    ]);
+    expect(mockIssueService.list).toHaveBeenCalledWith(companyId, {
+      assigneeAgentId: agentId,
+      status: "todo,in_progress,blocked",
+      includeRoutineExecutions: true,
+      limit: 500,
+    });
+    expect(mockIssueService.listDependencyReadiness).toHaveBeenCalledWith(companyId, ["issue-1"]);
   });
 
   it("rejects heartbeat cancellation outside the caller company scope", async () => {
