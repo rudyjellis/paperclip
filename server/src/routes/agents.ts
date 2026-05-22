@@ -1266,10 +1266,10 @@ export function agentRoutes(
     res.json(
       rows.map((issue) => {
         const readiness = dependencyReadiness.get(issue.id);
-        const activeChildBlocked = issue.status === "blocked"
-          && issue.blockerAttention?.state === "covered"
-          && issue.blockerAttention.reason === "active_child";
-        const unresolvedBlockerCount = activeChildBlocked
+        const childDrivenBlocked = issue.status === "blocked"
+          && (readiness?.unresolvedBlockerCount ?? 0) === 0
+          && (issue.blockerAttention?.unresolvedBlockerCount ?? 0) > 0;
+        const unresolvedBlockerCount = childDrivenBlocked
           ? Math.max(readiness?.unresolvedBlockerCount ?? 0, issue.blockerAttention?.unresolvedBlockerCount ?? 0)
           : (readiness?.unresolvedBlockerCount ?? 0);
 
@@ -1284,7 +1284,7 @@ export function agentRoutes(
           parentId: issue.parentId,
           updatedAt: issue.updatedAt,
           activeRun: issue.activeRun,
-          dependencyReady: (readiness?.isDependencyReady ?? true) && !activeChildBlocked,
+          dependencyReady: (readiness?.isDependencyReady ?? true) && !childDrivenBlocked,
           unresolvedBlockerCount,
           unresolvedBlockerIssueIds: readiness?.unresolvedBlockerIssueIds ?? [],
         };

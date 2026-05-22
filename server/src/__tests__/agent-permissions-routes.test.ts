@@ -1241,6 +1241,65 @@ describe.sequential("agent permission routes", () => {
     expect(mockIssueService.listDependencyReadiness).toHaveBeenCalledWith(companyId, ["issue-1"]);
   });
 
+  it("marks stalled-review child paths as not ready in inbox-lite", async () => {
+    mockIssueService.list.mockResolvedValue([
+      {
+        id: "issue-2",
+        identifier: "PAP-1340",
+        title: "Blocked parent waiting on stalled child review",
+        status: "blocked",
+        priority: "high",
+        projectId: "project-1",
+        goalId: "goal-1",
+        parentId: null,
+        updatedAt: "2026-05-22T02:40:30.000Z",
+        activeRun: null,
+        blockerAttention: {
+          state: "stalled",
+          reason: "stalled_review",
+          unresolvedBlockerCount: 1,
+          coveredBlockerCount: 0,
+          stalledBlockerCount: 1,
+          attentionBlockerCount: 0,
+          sampleBlockerIdentifier: "PAP-1338",
+          sampleStalledBlockerIdentifier: "PAP-1338",
+        },
+      },
+    ]);
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map([
+      ["issue-2", {
+        issueId: "issue-2",
+        blockerIssueIds: [],
+        unresolvedBlockerIssueIds: [],
+        unresolvedBlockerCount: 0,
+        allBlockersDone: true,
+        isDependencyReady: true,
+      }],
+    ]));
+
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: "run-1",
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/agents/me/inbox-lite"));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({
+        id: "issue-2",
+        identifier: "PAP-1340",
+        dependencyReady: false,
+        unresolvedBlockerCount: 1,
+        unresolvedBlockerIssueIds: [],
+      }),
+    ]);
+    expect(mockIssueService.listDependencyReadiness).toHaveBeenCalledWith(companyId, ["issue-2"]);
+  });
+
   it("rejects heartbeat cancellation outside the caller company scope", async () => {
     mockHeartbeatService.getRun.mockResolvedValue({
       id: "run-1",
