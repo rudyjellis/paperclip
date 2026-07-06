@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  activityLog,
   agents,
   agentRuntimeState,
   agentWakeupRequests,
   companies,
+  companyMemberships,
   companySkills,
   costEvents,
   createDb,
@@ -91,12 +93,14 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     mockWorkspaceRuntime.setupFailureMessage = null;
     unregisterServerAdapter(TEST_ADAPTER_TYPE);
     await db.delete(costEvents);
+    await db.delete(activityLog);
     await db.delete(heartbeatRunEvents);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(agentRuntimeState);
     await db.delete(agents);
     await db.delete(companySkills);
+    await db.delete(companyMemberships);
     await db.delete(companies);
   });
 
@@ -143,11 +147,20 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     };
     registerServerAdapter(adapter);
 
+    const responsibleUserId = `owner-${randomUUID()}`;
     await db.insert(companies).values({
       id: companyId,
       name: "Paperclip",
       issuePrefix,
       requireBoardApprovalForNewAgents: false,
+      defaultResponsibleUserId: responsibleUserId,
+    });
+    await db.insert(companyMemberships).values({
+      companyId,
+      principalType: "user",
+      principalId: responsibleUserId,
+      membershipRole: "owner",
+      status: "active",
     });
     await db.insert(agents).values({
       id: agentId,
@@ -247,11 +260,20 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     };
     registerServerAdapter(adapter);
 
+    const responsibleUserId = `owner-${randomUUID()}`;
     await db.insert(companies).values({
       id: companyId,
       name: "Paperclip",
       issuePrefix,
       requireBoardApprovalForNewAgents: false,
+      defaultResponsibleUserId: responsibleUserId,
+    });
+    await db.insert(companyMemberships).values({
+      companyId,
+      principalType: "user",
+      principalId: responsibleUserId,
+      membershipRole: "owner",
+      status: "active",
     });
     await db.insert(agents).values({
       id: agentId,
