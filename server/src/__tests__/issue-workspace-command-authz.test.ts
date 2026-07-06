@@ -90,6 +90,9 @@ function registerRouteMocks() {
   }));
 
   vi.doMock("../services/index.js", () => ({
+    companyService: () => ({
+      getById: vi.fn(async () => ({ id: "company-1", attachmentMaxBytes: 10 * 1024 * 1024 })),
+    }),
     accessService: () => mockAccessService,
     agentService: () => mockAgentService,
     documentService: () => ({}),
@@ -111,6 +114,10 @@ function registerRouteMocks() {
       syncComment: async () => undefined,
       syncDocument: async () => undefined,
       syncIssue: async () => undefined,
+    }),
+    issueRecoveryActionService: () => ({
+      getActiveForIssue: vi.fn(async () => null),
+      listActiveForIssues: vi.fn(async () => new Map()),
     }),
     issueService: () => mockIssueService,
     logActivity: mockLogActivity,
