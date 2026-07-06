@@ -51,6 +51,20 @@ describe("buildPaperclipEnv", () => {
     expect(env.PAPERCLIP_API_URL).toBe("http://localhost:4100");
   });
 
+  it("prefers the direct listen URL for local adapter env even when a public URL is configured", () => {
+    process.env.PAPERCLIP_RUNTIME_API_URL = "https://paperclip.example.test";
+    process.env.PAPERCLIP_API_URL = "https://paperclip.example.test";
+    process.env.PAPERCLIP_LISTEN_HOST = "0.0.0.0";
+    process.env.PAPERCLIP_LISTEN_PORT = "3101";
+
+    const env = buildPaperclipEnv(
+      { id: "agent-1", companyId: "company-1" },
+      { preferLocalRuntimeApiUrl: true },
+    );
+
+    expect(env.PAPERCLIP_API_URL).toBe("http://localhost:3101");
+  });
+
   it("uses runtime listen host/port when explicit URL is not set", () => {
     delete process.env.PAPERCLIP_RUNTIME_API_URL;
     delete process.env.PAPERCLIP_API_URL;
