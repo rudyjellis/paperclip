@@ -401,6 +401,20 @@ export {
 } from "./work-product.js";
 
 export {
+  reviewedArtifactContextTypeSchema,
+  reviewedArtifactSelectionModeSchema,
+  reviewedArtifactSourceTypeSchema,
+  reviewedArtifactDisplayHintSchema,
+  reviewedArtifactContextSchema,
+  reviewedArtifactSourceSchema,
+  writableReviewedArtifactSourceSchema,
+  createReviewedArtifactItemSchema,
+  createReviewedArtifactSetSchema,
+  type CreateReviewedArtifactItem,
+  type CreateReviewedArtifactSet,
+} from "./reviewed-artifact.js";
+
+export {
   COMPANY_ARTIFACTS_DEFAULT_LIMIT,
   COMPANY_ARTIFACTS_MAX_LIMIT,
   COMPANY_ARTIFACTS_MAX_QUERY_LENGTH,
