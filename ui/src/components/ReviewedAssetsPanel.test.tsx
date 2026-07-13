@@ -192,6 +192,34 @@ describe("ReviewedAssetsPanel", () => {
     act(() => root.unmount());
   });
 
+  it("links document artifacts to their source issue instead of the current issue path", () => {
+    const root = renderPanel(container, {
+      response: response([
+        createArtifact({
+          id: "cross-issue-identifier",
+          title: "Cross issue plan",
+          sourceIssue: { id: "issue-2", identifier: "DIG-2", title: "Different issue" },
+          document: { key: "plan", revisionId: "rev-2", revisionNumber: 2 },
+          preview: { mode: "markdown", previewable: true, markdownBody: "# Plan" },
+        }),
+        createArtifact({
+          id: "cross-issue-id",
+          title: "Cross issue notes",
+          sourceIssue: { id: "issue-3", identifier: null, title: "Fallback issue" },
+          document: { key: "notes", revisionId: "rev-3", revisionNumber: 3 },
+          preview: { mode: "markdown", previewable: true, markdownBody: "# Notes" },
+        }),
+      ]),
+      issuePathId: "DIG-1",
+    });
+
+    expect(container.querySelector('a[href="/issues/DIG-2#document-plan"]')?.textContent).toContain("Open document");
+    expect(container.querySelector('a[href="/issues/issue-3#document-notes"]')?.textContent).toContain("Open document");
+    expect(container.querySelector('a[href="/issues/DIG-1#document-plan"]')).toBeNull();
+    expect(container.querySelector('a[href="/issues/DIG-1#document-notes"]')).toBeNull();
+    act(() => root.unmount());
+  });
+
   it("renders link and download-only assets with safe actions", () => {
     const root = renderPanel(container, {
       response: response([
