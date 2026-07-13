@@ -75,6 +75,42 @@ export function approvalRoutes(
     return false;
   }
 
+  async function canReadIssue(
+    req: Request,
+    issue: {
+      id: string;
+      companyId: string;
+      projectId: string | null;
+      parentId: string | null;
+      assigneeAgentId: string | null;
+      assigneeUserId: string | null;
+      status: string;
+    },
+  ) {
+    const decision = await access.decide({
+      actor: req.actor,
+      action: "issue:read",
+      resource: {
+        type: "issue",
+        companyId: issue.companyId,
+        issueId: issue.id,
+        projectId: issue.projectId,
+        parentIssueId: issue.parentId,
+        assigneeAgentId: issue.assigneeAgentId,
+        assigneeUserId: issue.assigneeUserId,
+        status: issue.status,
+      },
+      scope: {
+        issueId: issue.id,
+        projectId: issue.projectId,
+        parentIssueId: issue.parentId,
+        assigneeAgentId: issue.assigneeAgentId,
+        assigneeUserId: issue.assigneeUserId,
+      },
+    });
+    return decision.allowed;
+  }
+
   async function assertApprovalMutationAllowedByRunContext(req: Request, res: any, companyId: string) {
     if (req.actor.type !== "agent") return true;
     const runId = req.actor.runId?.trim();
@@ -210,6 +246,7 @@ export function approvalRoutes(
       approvalId: approval.id,
       approvalPayload: redactEventPayload(approval.payload) ?? {},
       actorType: req.actor.type === "agent" ? "agent" : "board",
+      canReadSourceIssue: async (issue) => canReadIssue(req, issue),
     });
     res.json(response);
   });

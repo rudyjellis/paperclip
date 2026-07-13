@@ -3718,6 +3718,7 @@ export function issueRoutes(
       companyId: issue.companyId,
       issueId: issue.id,
       actorType: req.actor.type === "agent" ? "agent" : "board",
+      canReadSourceIssue: async (sourceIssue) => (await decideIssueAccess(req, sourceIssue, "issue:read")).allowed,
     });
     res.json(response);
   });

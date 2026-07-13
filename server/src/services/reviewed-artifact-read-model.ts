@@ -31,10 +31,26 @@ type ReviewedArtifactActorType = "board" | "agent";
 
 type IssueSummaryRow = {
   id: string;
+  companyId: string;
   identifier: string | null;
   title: string;
   executionWorkspaceId: string | null;
+  projectId: string | null;
+  parentId: string | null;
+  assigneeAgentId: string | null;
+  assigneeUserId: string | null;
+  status: string;
 };
+
+type ReviewedArtifactSourceIssueAccess = (issue: {
+  id: string;
+  companyId: string;
+  projectId: string | null;
+  parentId: string | null;
+  assigneeAgentId: string | null;
+  assigneeUserId: string | null;
+  status: string;
+}) => Promise<boolean>;
 
 type ResolvedDocumentRow = {
   issueId: string;
@@ -198,6 +214,23 @@ function defaultArtifactTitle(item: ReviewedArtifactItem, fallback: string) {
   return title && title.length > 0 ? title : fallback;
 }
 
+function permissionDeniedArtifact(
+  item: ReviewedArtifactItem,
+  title: string,
+  reason: string,
+): ReviewedArtifactResolved {
+  return withBaseResolvedArtifact(item, {
+    source: { type: item.source.type },
+    sourceIssue: null,
+    title,
+    description: null,
+    resolution: permissionDeniedResolution(reason),
+    preview: unsupportedPreview(),
+    document: null,
+    snapshot: null,
+  });
+}
+
 function withBaseResolvedArtifact(
   item: ReviewedArtifactItem,
   overrides: Partial<ReviewedArtifactResolved>,
@@ -325,9 +358,15 @@ export function reviewedArtifactReadModelService(db: Db) {
       pending = db
         .select({
           id: issues.id,
+          companyId: issues.companyId,
           identifier: issues.identifier,
           title: issues.title,
           executionWorkspaceId: issues.executionWorkspaceId,
+          projectId: issues.projectId,
+          parentId: issues.parentId,
+          assigneeAgentId: issues.assigneeAgentId,
+          assigneeUserId: issues.assigneeUserId,
+          status: issues.status,
         })
         .from(issues)
         .where(and(eq(issues.companyId, companyId), eq(issues.id, issueId)))
@@ -418,6 +457,38 @@ export function reviewedArtifactReadModelService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
+  async function canReadSourceIssue(
+    issue: IssueSummaryRow,
+    access: ReviewedArtifactSourceIssueAccess,
+    cache: Map<string, Promise<boolean>>,
+  ) {
+    const cacheKey = `${issue.companyId}:${issue.id}`;
+    let pending = cache.get(cacheKey);
+    if (!pending) {
+      pending = access(issue);
+      cache.set(cacheKey, pending);
+    }
+    return pending;
+  }
+
+  async function getSourceIssueVisibility(
+    companyId: string,
+    issueId: string,
+    input: {
+      canReadSourceIssue: ReviewedArtifactSourceIssueAccess;
+      sourceIssueAccessCache: Map<string, Promise<boolean>>;
+    },
+  ): Promise<
+    | { kind: "allowed"; issue: IssueSummaryRow }
+    | { kind: "denied" }
+    | { kind: "missing" }
+  > {
+    const issue = await getIssueSummary(companyId, issueId);
+    if (!issue) return { kind: "missing" };
+    const allowed = await canReadSourceIssue(issue, input.canReadSourceIssue, input.sourceIssueAccessCache);
+    return allowed ? { kind: "allowed", issue } : { kind: "denied" };
+  }
+
   async function resolveItem(
     item: ReviewedArtifactItem,
     context: {
@@ -425,6 +496,8 @@ export function reviewedArtifactReadModelService(db: Db) {
       actorType: ReviewedArtifactActorType;
       approvalPayload?: Record<string, unknown> | null;
       contextIssueId?: string | null;
+      canReadSourceIssue: ReviewedArtifactSourceIssueAccess;
+      sourceIssueAccessCache: Map<string, Promise<boolean>>;
     },
   ): Promise<{ artifact: ReviewedArtifactResolved; error?: ReviewedArtifactError }> {
     if (item.source.type === "unresolved") {
@@ -446,15 +519,25 @@ export function reviewedArtifactReadModelService(db: Db) {
 
     switch (item.source.type) {
       case "issue_document": {
-        const [sourceIssue, document] = await Promise.all([
-          getIssueSummary(context.companyId, item.source.issueId),
-          getDocumentVersion(
-            context.companyId,
-            item.source.issueId,
-            item.source.documentKey,
-            item.source.revisionId ?? null,
-          ),
-        ]);
+        const sourceVisibility = await getSourceIssueVisibility(context.companyId, item.source.issueId, context);
+        if (sourceVisibility.kind === "denied") {
+          return {
+            artifact: permissionDeniedArtifact(
+              item,
+              "Restricted issue document",
+              "Source issue is outside this actor's authorization boundary.",
+            ),
+          };
+        }
+        const sourceIssue = sourceVisibility.kind === "allowed" ? sourceVisibility.issue : null;
+        const document = sourceVisibility.kind === "missing"
+          ? null
+          : await getDocumentVersion(
+              context.companyId,
+              item.source.issueId,
+              item.source.documentKey,
+              item.source.revisionId ?? null,
+            );
         if (!document) {
           return {
             artifact: withBaseResolvedArtifact(item, {
@@ -527,10 +610,20 @@ export function reviewedArtifactReadModelService(db: Db) {
       }
 
       case "issue_attachment": {
-        const [sourceIssue, attachment] = await Promise.all([
-          getIssueSummary(context.companyId, item.source.issueId),
-          getAttachment(context.companyId, item.source.attachmentId),
-        ]);
+        const sourceVisibility = await getSourceIssueVisibility(context.companyId, item.source.issueId, context);
+        if (sourceVisibility.kind === "denied") {
+          return {
+            artifact: permissionDeniedArtifact(
+              item,
+              "Restricted issue attachment",
+              "Source issue is outside this actor's authorization boundary.",
+            ),
+          };
+        }
+        const sourceIssue = sourceVisibility.kind === "allowed" ? sourceVisibility.issue : null;
+        const attachment = sourceVisibility.kind === "missing"
+          ? null
+          : await getAttachment(context.companyId, item.source.attachmentId);
         if (!attachment) {
           return {
             artifact: withBaseResolvedArtifact(item, {
@@ -571,10 +664,20 @@ export function reviewedArtifactReadModelService(db: Db) {
       }
 
       case "issue_work_product": {
-        const [sourceIssue, workProduct] = await Promise.all([
-          getIssueSummary(context.companyId, item.source.issueId),
-          workProducts.getById(item.source.workProductId),
-        ]);
+        const sourceVisibility = await getSourceIssueVisibility(context.companyId, item.source.issueId, context);
+        if (sourceVisibility.kind === "denied") {
+          return {
+            artifact: permissionDeniedArtifact(
+              item,
+              "Restricted issue work product",
+              "Source issue is outside this actor's authorization boundary.",
+            ),
+          };
+        }
+        const sourceIssue = sourceVisibility.kind === "allowed" ? sourceVisibility.issue : null;
+        const workProduct = sourceVisibility.kind === "missing"
+          ? null
+          : await workProducts.getById(item.source.workProductId);
         if (!workProduct || workProduct.companyId !== context.companyId) {
           return {
             artifact: withBaseResolvedArtifact(item, {
@@ -589,9 +692,15 @@ export function reviewedArtifactReadModelService(db: Db) {
         const suggestedArtifact = buildSuggestedArtifactFromWorkProduct(
           sourceIssue ?? {
             id: item.source.issueId,
+            companyId: context.companyId,
             identifier: null,
             title: "Linked issue",
             executionWorkspaceId: null,
+            projectId: null,
+            parentId: null,
+            assigneeAgentId: null,
+            assigneeUserId: null,
+            status: "done",
           },
           workProduct,
           item.orderIndex,
@@ -664,14 +773,19 @@ export function reviewedArtifactReadModelService(db: Db) {
         }
 
         const { preview, resolution } = textPreviewFromValue(resolved.value);
+        let sourceIssue: ReviewedArtifactIssueSummary | null = null;
+        if (context.contextIssueId) {
+          const sourceVisibility = await getSourceIssueVisibility(context.companyId, context.contextIssueId, context);
+          if (sourceVisibility.kind === "allowed") {
+            sourceIssue = toIssueSummary(sourceVisibility.issue);
+          }
+        }
         return {
           artifact: withBaseResolvedArtifact(item, {
             title: defaultArtifactTitle(item, "Approval payload"),
             resolution,
             preview,
-            sourceIssue: context.contextIssueId
-              ? toIssueSummary(await getIssueSummary(context.companyId, context.contextIssueId))
-              : null,
+            sourceIssue,
             snapshot: {
               ...(item.metadata ?? {}),
               pointer: item.source.pointer,
@@ -681,7 +795,17 @@ export function reviewedArtifactReadModelService(db: Db) {
       }
 
       case "workspace_file": {
-        const sourceIssue = await getIssueSummary(context.companyId, item.source.issueId);
+        const sourceVisibility = await getSourceIssueVisibility(context.companyId, item.source.issueId, context);
+        if (sourceVisibility.kind === "denied") {
+          return {
+            artifact: permissionDeniedArtifact(
+              item,
+              "Restricted workspace file",
+              "Source issue is outside this actor's authorization boundary.",
+            ),
+          };
+        }
+        const sourceIssue = sourceVisibility.kind === "allowed" ? sourceVisibility.issue : null;
         if (context.actorType !== "board") {
           return {
             artifact: withBaseResolvedArtifact(item, {
@@ -754,6 +878,8 @@ export function reviewedArtifactReadModelService(db: Db) {
       actorType: ReviewedArtifactActorType;
       approvalPayload?: Record<string, unknown> | null;
       contextIssueId?: string | null;
+      canReadSourceIssue: ReviewedArtifactSourceIssueAccess;
+      sourceIssueAccessCache: Map<string, Promise<boolean>>;
     },
   ): Promise<ReviewedArtifactsResponse> {
     const artifacts: ReviewedArtifactResolved[] = [];
@@ -806,10 +932,15 @@ export function reviewedArtifactReadModelService(db: Db) {
       companyId: string;
       issueId: string;
       actorType: ReviewedArtifactActorType;
+      canReadSourceIssue: ReviewedArtifactSourceIssueAccess;
     }): Promise<ReviewedArtifactsResponse> {
+      const sourceIssueAccessCache = new Map<string, Promise<boolean>>();
       const activeSet = await reviewedArtifacts.getActiveForIssueReview(input.companyId, input.issueId);
       if (activeSet) {
-        return resolvePersistedSet(activeSet, input);
+        return resolvePersistedSet(activeSet, {
+          ...input,
+          sourceIssueAccessCache,
+        });
       }
 
       const issue = await getIssueSummary(input.companyId, input.issueId);
@@ -824,12 +955,15 @@ export function reviewedArtifactReadModelService(db: Db) {
       approvalId: string;
       approvalPayload: Record<string, unknown> | null;
       actorType: ReviewedArtifactActorType;
+      canReadSourceIssue: ReviewedArtifactSourceIssueAccess;
     }): Promise<ReviewedArtifactsResponse> {
+      const sourceIssueAccessCache = new Map<string, Promise<boolean>>();
       const activeSet = await reviewedArtifacts.getActiveForApproval(input.companyId, input.approvalId);
       if (activeSet) {
         return resolvePersistedSet(activeSet, {
           ...input,
           contextIssueId: activeSet.contextIssueId ?? null,
+          sourceIssueAccessCache,
         });
       }
 
@@ -837,6 +971,9 @@ export function reviewedArtifactReadModelService(db: Db) {
       const artifactGroups = await Promise.all(linkedIssues.map(async (issue) => {
         const issueSummary = await getIssueSummary(input.companyId, issue.id);
         if (!issueSummary) return [];
+        if (!(await canReadSourceIssue(issueSummary, input.canReadSourceIssue, sourceIssueAccessCache))) {
+          return [];
+        }
         const response = await buildSuggestedIssueArtifacts(issueSummary);
         return response.artifacts;
       }));

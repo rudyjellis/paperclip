@@ -182,6 +182,7 @@ describeEmbeddedPostgres("reviewedArtifactReadModelService", () => {
       companyId,
       issueId,
       actorType: "board",
+      canReadSourceIssue: async () => true,
     });
 
     expect(response.contextType).toBe("issue_review");
@@ -275,6 +276,7 @@ describeEmbeddedPostgres("reviewedArtifactReadModelService", () => {
       companyId,
       issueId,
       actorType: "board",
+      canReadSourceIssue: async () => true,
     });
 
     expect(response.contextType).toBe("issue_review");
@@ -344,6 +346,7 @@ describeEmbeddedPostgres("reviewedArtifactReadModelService", () => {
       approvalId,
       approvalPayload: { summary: "Approve the linked preview" },
       actorType: "board",
+      canReadSourceIssue: async () => true,
     });
 
     expect(response.contextType).toBe("approval");
@@ -359,6 +362,212 @@ describeEmbeddedPostgres("reviewedArtifactReadModelService", () => {
       preview: expect.objectContaining({
         mode: "link",
         previewUrl: "https://example.com/approval-preview",
+      }),
+    }));
+  });
+
+  it("returns a permission-denied placeholder for explicit cross-issue artifacts outside the actor boundary", async () => {
+    const companyId = randomUUID();
+    const reviewIssueId = randomUUID();
+    const sourceIssueId = randomUUID();
+    const documentId = randomUUID();
+    const revisionId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: issuePrefix(companyId),
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(issues).values([
+      {
+        id: reviewIssueId,
+        companyId,
+        title: "Review packet",
+        status: "in_review",
+        priority: "high",
+        identifier: "PAP-1763",
+      },
+      {
+        id: sourceIssueId,
+        companyId,
+        title: "Restricted source issue",
+        status: "in_progress",
+        priority: "high",
+        identifier: "PAP-1764",
+      },
+    ]);
+    await db.insert(documents).values({
+      id: documentId,
+      companyId,
+      title: "Restricted plan",
+      format: "markdown",
+      latestBody: "# Restricted plan",
+      latestRevisionId: revisionId,
+      latestRevisionNumber: 1,
+    });
+    await db.insert(documentRevisions).values({
+      id: revisionId,
+      companyId,
+      documentId,
+      revisionNumber: 1,
+      title: "Restricted plan",
+      format: "markdown",
+      body: "# Restricted plan",
+    });
+    await db.insert(issueDocuments).values({
+      companyId,
+      issueId: sourceIssueId,
+      documentId,
+      key: "plan",
+    });
+
+    await persistence.createSet({
+      companyId,
+      context: { type: "issue_review", issueId: reviewIssueId },
+      title: "Board review packet",
+      items: [
+        {
+          source: { type: "issue_document", issueId: sourceIssueId, documentKey: "plan", revisionId },
+          title: "Restricted plan",
+          displayHint: "markdown",
+          selectedExplicitly: true,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    const response = await readModel.getForIssue({
+      companyId,
+      issueId: reviewIssueId,
+      actorType: "agent",
+      canReadSourceIssue: async (issue) => issue.id !== sourceIssueId,
+    });
+
+    expect(response.contextType).toBe("issue_review");
+    expect(response.errors).toEqual([]);
+    expect(response.artifacts).toHaveLength(1);
+    expect(response.artifacts[0]).toEqual(expect.objectContaining({
+      sourceType: "issue_document",
+      source: { type: "issue_document" },
+      sourceIssue: null,
+      title: "Restricted issue document",
+      description: null,
+      resolution: expect.objectContaining({
+        status: "permission_denied",
+        reason: "Source issue is outside this actor's authorization boundary.",
+      }),
+      preview: expect.objectContaining({
+        mode: "unsupported",
+        previewable: false,
+      }),
+      document: null,
+      snapshot: null,
+    }));
+  });
+
+  it("filters approval fallback suggestions to linked issues the actor can read", async () => {
+    const companyId = randomUUID();
+    const visibleIssueId = randomUUID();
+    const hiddenIssueId = randomUUID();
+    const approvalId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: issuePrefix(companyId),
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(issues).values([
+      {
+        id: visibleIssueId,
+        companyId,
+        title: "Visible preview issue",
+        status: "in_review",
+        priority: "medium",
+        identifier: "PAP-1765",
+      },
+      {
+        id: hiddenIssueId,
+        companyId,
+        title: "Hidden preview issue",
+        status: "in_review",
+        priority: "medium",
+        identifier: "PAP-1766",
+      },
+    ]);
+    await db.insert(approvals).values({
+      id: approvalId,
+      companyId,
+      type: "request_board_approval",
+      status: "pending",
+      payload: { summary: "Approve linked previews" },
+    });
+    await db.insert(issueApprovals).values([
+      {
+        companyId,
+        issueId: visibleIssueId,
+        approvalId,
+      },
+      {
+        companyId,
+        issueId: hiddenIssueId,
+        approvalId,
+      },
+    ]);
+    await db.insert(issueWorkProducts).values([
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: visibleIssueId,
+        type: "artifact",
+        provider: "paperclip",
+        title: "Visible preview",
+        url: "https://example.com/visible-preview",
+        status: "ready_for_review",
+        reviewState: "needs_board_review",
+        metadata: {
+          previewMode: "link",
+          previewUrl: "https://example.com/visible-preview",
+        },
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: hiddenIssueId,
+        type: "artifact",
+        provider: "paperclip",
+        title: "Hidden preview",
+        url: "https://example.com/hidden-preview",
+        status: "ready_for_review",
+        reviewState: "needs_board_review",
+        metadata: {
+          previewMode: "link",
+          previewUrl: "https://example.com/hidden-preview",
+        },
+      },
+    ]);
+
+    const response = await readModel.getForApproval({
+      companyId,
+      approvalId,
+      approvalPayload: { summary: "Approve linked previews" },
+      actorType: "agent",
+      canReadSourceIssue: async (issue) => issue.id !== hiddenIssueId,
+    });
+
+    expect(response.contextType).toBe("approval");
+    expect(response.errors).toEqual([]);
+    expect(response.artifacts).toHaveLength(1);
+    expect(response.artifacts[0]).toEqual(expect.objectContaining({
+      title: "Visible preview",
+      sourceIssue: expect.objectContaining({
+        id: visibleIssueId,
+        identifier: "PAP-1765",
+      }),
+      preview: expect.objectContaining({
+        mode: "link",
+        previewUrl: "https://example.com/visible-preview",
       }),
     }));
   });
