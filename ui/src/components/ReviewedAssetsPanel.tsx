@@ -136,8 +136,9 @@ function ArtifactActions({
   issuePathId?: string | null;
   onOpenImage: (artifact: ReviewedArtifactPanelItem) => void;
 }) {
-  const documentHref = issuePathId && artifact.document?.key
-    ? `/issues/${issuePathId}#document-${encodeURIComponent(artifact.document.key)}`
+  const documentIssuePathId = artifact.sourceIssue?.identifier ?? artifact.sourceIssue?.id ?? issuePathId;
+  const documentHref = documentIssuePathId && artifact.document?.key
+    ? `/issues/${documentIssuePathId}#document-${encodeURIComponent(artifact.document.key)}`
     : null;
   const externalHref = artifact.preview.externalUrl ?? (artifact.renderKind === "link" ? artifact.preview.previewUrl : null);
   const markdownBody = artifact.preview.markdownBody ?? "";
