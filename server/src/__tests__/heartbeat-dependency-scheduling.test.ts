@@ -902,6 +902,7 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
       issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
       defaultResponsibleUserId: "responsible-user",
       requireBoardApprovalForNewAgents: false,
+      defaultResponsibleUserId: "responsible-user",
     });
     await db.insert(agents).values({
       id: agentId,
