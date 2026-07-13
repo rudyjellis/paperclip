@@ -41,3 +41,15 @@ test('findExistingComment: returns null when no signed comment exists', async ()
 
   assert.equal(comment, null);
 });
+
+test('findExistingComment: recognizes fallback github-actions bot comments', async () => {
+  const comment = await findExistingComment(async () => ([
+    {
+      id: 2,
+      user: { login: 'github-actions[bot]' },
+      body: 'Fallback review status.\n\n— commitperclip',
+    },
+  ]), 'token', 'paperclipai/paperclip', 6469);
+
+  assert.equal(comment?.id, 2);
+});
