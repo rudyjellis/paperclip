@@ -1,0 +1,30 @@
+[Unit]
+Description=Paperclip Control Plane (production build)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exedev
+Group=exedev
+WorkingDirectory=/home/exedev/paperclip
+EnvironmentFile=/home/exedev/paperclip/.env
+Environment=HOME=/home/exedev
+Environment=TZ=America/New_York
+Environment=NODE_ENV=production
+Environment=SERVE_UI=true
+Environment=PATH=/home/exedev/.local/bin:/home/exedev/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Production invocation: run the pre-built server bundle with the tsx loader
+# (the loader resolves workspace packages' dev "exports" -> .ts maps; no Vite
+# dev middleware, UI served as pre-bundled static assets from server/ui-dist).
+# Rebuild with /home/exedev/scripts/paperclip-deploy-prod.sh before deploying.
+ExecStart=/home/exedev/node/bin/node --import ./server/node_modules/tsx/dist/loader.mjs ./server/dist/index.js
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

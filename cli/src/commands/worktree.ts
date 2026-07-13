@@ -45,6 +45,7 @@ import {
   runDatabaseRestore,
   createEmbeddedPostgresLogBuffer,
   formatEmbeddedPostgresError,
+  prepareEmbeddedPostgresNativeRuntime,
 } from "@paperclipai/db";
 import type { Command } from "commander";
 import { ensureAgentJwtSecret, loadPaperclipEnvFile, mergePaperclipEnvEntries, readPaperclipEnvEntries, resolvePaperclipEnvFile } from "../config/env.js";
@@ -213,6 +214,10 @@ function isCurrentSourceConfigPath(sourceConfigPath: string): boolean {
     return false;
   }
   return path.resolve(currentConfigPath) === path.resolve(sourceConfigPath);
+}
+
+function resolveEmbeddedPostgresDataDir(dataDir: string, configPath: string): string {
+  return resolveRuntimeLikePath(dataDir, configPath);
 }
 
 function formatSeededWorktreeExecutionQuarantineSummary(
@@ -456,7 +461,15 @@ function extractExecSyncErrorMessage(error: unknown): string | null {
 
 function localBranchExists(cwd: string, branchName: string): boolean {
   try {
-    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], {
+    return gitRefExists(cwd, `refs/heads/${branchName}`);
+  } catch {
+    return false;
+  }
+}
+
+function gitRefExists(cwd: string, refName: string): boolean {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", refName], {
       cwd,
       stdio: "ignore",
     });
@@ -464,6 +477,35 @@ function localBranchExists(cwd: string, branchName: string): boolean {
   } catch {
     return false;
   }
+}
+
+function gitRemoteExists(cwd: string, remoteName: string): boolean {
+  try {
+    execFileSync("git", ["remote", "get-url", remoteName], {
+      cwd,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveStartPointRemoteToFetch(cwd: string, startPoint?: string): string | null {
+  if (!startPoint || !startPoint.includes("/")) {
+    return null;
+  }
+  const [remoteName] = startPoint.split("/", 1);
+  if (!remoteName || !gitRemoteExists(cwd, remoteName)) {
+    return null;
+  }
+  if (
+    gitRefExists(cwd, `refs/heads/${startPoint}`)
+    || gitRefExists(cwd, `refs/tags/${startPoint}`)
+  ) {
+    return null;
+  }
+  return remoteName;
 }
 
 export function resolveGitWorktreeAddArgs(input: {
@@ -988,15 +1030,28 @@ async function ensureRepairTargetWorktree(input: {
   };
 }
 
-function resolveSourceConnectionString(config: PaperclipConfig, envEntries: Record<string, string>, portOverride?: number): string {
-  if (config.database.mode === "postgres") {
-    const connectionString = nonEmpty(envEntries.DATABASE_URL) ?? nonEmpty(config.database.connectionString);
-    if (!connectionString) {
-      throw new Error(
-        "Source instance uses postgres mode but has no connection string in config or adjacent .env.",
-      );
-    }
+function resolveSourceConnectionString(
+  sourceConfigPath: string,
+  config: PaperclipConfig,
+  envEntries: Record<string, string>,
+  portOverride?: number,
+): string {
+  const runtimeEnvConnectionString = isCurrentSourceConfigPath(sourceConfigPath)
+    ? nonEmpty(process.env.DATABASE_URL)
+    : null;
+  const fileEnvConnectionString = nonEmpty(envEntries.DATABASE_URL);
+  const configConnectionString =
+    config.database.mode === "postgres" ? nonEmpty(config.database.connectionString) : null;
+  const connectionString = runtimeEnvConnectionString ?? fileEnvConnectionString ?? configConnectionString;
+
+  if (connectionString) {
     return connectionString;
+  }
+
+  if (config.database.mode === "postgres") {
+    throw new Error(
+      "Source instance uses postgres mode but has no connection string in runtime env, config, or adjacent .env.",
+    );
   }
 
   const port = portOverride ?? config.database.embeddedPostgresPort;
@@ -1063,6 +1118,7 @@ async function ensureEmbeddedPostgres(dataDir: string, preferredPort: number): P
       "Embedded PostgreSQL support requires dependency `embedded-postgres`. Reinstall dependencies and try again.",
     );
   }
+  await prepareEmbeddedPostgresNativeRuntime();
 
   const postmasterPidFile = path.resolve(dataDir, "postmaster.pid");
   const runningPid = readRunningPostmasterPid(postmasterPidFile);
@@ -1299,13 +1355,17 @@ async function seedWorktreeDatabase(input: {
   try {
     if (input.sourceConfig.database.mode === "embedded-postgres") {
       sourceHandle = await ensureEmbeddedPostgres(
-        input.sourceConfig.database.embeddedPostgresDataDir,
+        resolveEmbeddedPostgresDataDir(
+          input.sourceConfig.database.embeddedPostgresDataDir,
+          input.sourceConfigPath,
+        ),
         input.sourceConfig.database.embeddedPostgresPort,
       );
       const sourceAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${sourceHandle.port}/postgres`;
       await ensurePostgresDatabase(sourceAdminConnectionString, "paperclip");
     }
     const sourceConnectionString = resolveSourceConnectionString(
+      input.sourceConfigPath,
       input.sourceConfig,
       sourceEnvEntries,
       sourceHandle?.port,
@@ -1322,7 +1382,10 @@ async function seedWorktreeDatabase(input: {
     });
 
     targetHandle = await ensureEmbeddedPostgres(
-      input.targetConfig.database.embeddedPostgresDataDir,
+      resolveEmbeddedPostgresDataDir(
+        input.targetConfig.database.embeddedPostgresDataDir,
+        input.targetPaths.configPath,
+      ),
       input.targetConfig.database.embeddedPostgresPort,
     );
 
@@ -1389,7 +1452,12 @@ async function runWorktreeInit(opts: WorktreeInitOptions): Promise<void> {
   }
 
   if (opts.force) {
-    rmSync(paths.repoConfigDir, { recursive: true, force: true });
+    // Only remove the specific files we're about to rewrite, not the whole
+    // repoConfigDir — that directory can contain sibling state such as
+    // <repo>/.paperclip/worktrees/ holding every repo-managed worktree
+    // checkout, and a recursive rmSync here would nuke them all.
+    rmSync(paths.configPath, { force: true });
+    rmSync(paths.envPath, { force: true });
     rmSync(paths.instanceRoot, { recursive: true, force: true });
   }
 
@@ -1514,16 +1582,16 @@ export async function worktreeMakeCommand(nameArg: string, opts: WorktreeMakeOpt
   }
 
   mkdirSync(path.dirname(targetPath), { recursive: true });
-  if (startPoint) {
-    const [remote] = startPoint.split("/", 1);
+  const fetchRemote = resolveStartPointRemoteToFetch(sourceCwd, startPoint);
+  if (fetchRemote) {
     try {
-      execFileSync("git", ["fetch", remote], {
+      execFileSync("git", ["fetch", fetchRemote], {
         cwd: sourceCwd,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
       throw new Error(
-        `Failed to fetch from remote "${remote}": ${extractExecSyncErrorMessage(error) ?? String(error)}`,
+        `Failed to fetch from remote "${fetchRemote}": ${extractExecSyncErrorMessage(error) ?? String(error)}`,
       );
     }
   }
@@ -1565,11 +1633,31 @@ export async function worktreeMakeCommand(nameArg: string, opts: WorktreeMakeOpt
   }
 }
 
+type PnpmInstallInvocation = {
+  command: string;
+  argsPrefix: string[];
+};
+
+export function resolvePnpmInstallInvocation(
+  env: NodeJS.ProcessEnv = process.env,
+  nodeExecPath = process.execPath,
+): PnpmInstallInvocation {
+  const npmExecPath = nonEmpty(env.npm_execpath);
+  if (npmExecPath && npmExecPath.toLowerCase().includes("pnpm")) {
+    if (/\.(cjs|mjs|js)$/i.test(npmExecPath)) {
+      return { command: nodeExecPath, argsPrefix: [npmExecPath] };
+    }
+    return { command: npmExecPath, argsPrefix: [] };
+  }
+  return { command: "pnpm", argsPrefix: [] };
+}
+
 function installDependenciesBestEffort(targetPath: string): void {
   const installSpinner = p.spinner();
   installSpinner.start("Installing dependencies...");
+  const pnpm = resolvePnpmInstallInvocation();
   try {
-    execFileSync("pnpm", ["install"], {
+    execFileSync(pnpm.command, [...pnpm.argsPrefix, "install"], {
       cwd: targetPath,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -1931,11 +2019,11 @@ async function openConfiguredDb(configPath: string): Promise<OpenDbHandle> {
   try {
     if (config.database.mode === "embedded-postgres") {
       embeddedHandle = await ensureEmbeddedPostgres(
-        config.database.embeddedPostgresDataDir,
+        resolveEmbeddedPostgresDataDir(config.database.embeddedPostgresDataDir, configPath),
         config.database.embeddedPostgresPort,
       );
     }
-    const connectionString = resolveSourceConnectionString(config, envEntries, embeddedHandle?.port);
+    const connectionString = resolveSourceConnectionString(configPath, config, envEntries, embeddedHandle?.port);
     const migrationState = await inspectMigrations(connectionString);
     if (migrationState.status !== "upToDate") {
       const pending =
@@ -2114,11 +2202,16 @@ function renderMergePlan(plan: Awaited<ReturnType<typeof collectMergePlan>>["pla
   return lines.join("\n");
 }
 
-function resolveRunningEmbeddedPostgresPid(config: PaperclipConfig): number | null {
+function resolveRunningEmbeddedPostgresPid(config: PaperclipConfig, configPath: string): number | null {
   if (config.database.mode !== "embedded-postgres") {
     return null;
   }
-  return readRunningPostmasterPid(path.resolve(config.database.embeddedPostgresDataDir, "postmaster.pid"));
+  return readRunningPostmasterPid(
+    path.resolve(
+      resolveEmbeddedPostgresDataDir(config.database.embeddedPostgresDataDir, configPath),
+      "postmaster.pid",
+    ),
+  );
 }
 
 async function collectMergePlan(input: {
@@ -3093,7 +3186,7 @@ async function runWorktreeReseed(opts: WorktreeReseedOptions): Promise<void> {
     configPath: targetEndpoint.configPath,
     rootPath: targetEndpoint.rootPath,
   });
-  const runningTargetPid = resolveRunningEmbeddedPostgresPid(targetConfig);
+  const runningTargetPid = resolveRunningEmbeddedPostgresPid(targetConfig, targetEndpoint.configPath);
   if (runningTargetPid && !opts.allowLiveTarget) {
     throw new Error(
       `Target worktree database appears to be running (pid ${runningTargetPid}). Stop Paperclip in ${targetEndpoint.rootPath} before reseeding, or re-run with --allow-live-target if you want to override this guard.`,
@@ -3250,7 +3343,7 @@ export function registerWorktreeCommands(program: Command): void {
     .command("worktree:make")
     .description("Create ~/NAME as a git worktree, then initialize an isolated Paperclip instance inside it")
     .argument("<name>", "Worktree name — auto-prefixed with paperclip- if needed (created at ~/paperclip-NAME)")
-    .option("--start-point <ref>", "Remote ref to base the new branch on (env: PAPERCLIP_WORKTREE_START_POINT)")
+    .option("--start-point <ref>", "Git ref or commit-ish to base the new branch on (env: PAPERCLIP_WORKTREE_START_POINT)")
     .option("--instance <id>", "Explicit isolated instance id")
     .option("--home <path>", `Home root for worktree instances (env: PAPERCLIP_WORKTREES_DIR, default: ${DEFAULT_WORKTREE_HOME})`)
     .option("--from-config <path>", "Source config.json to seed from")

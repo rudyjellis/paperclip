@@ -266,7 +266,11 @@ export async function rekeyLocalMasterKeyCommand(
 }
 
 export function registerSecretsCommands(program: Command): void {
-  const secrets = program.command("secrets").description("Local secrets maintenance commands");
+  // Attach the fork-local maintenance subcommands to the existing `secrets`
+  // command (registered by registerSecretCommands in commands/client/secrets.js)
+  // instead of creating a second `secrets` command, which commander rejects.
+  const existing = program.commands.find((cmd) => cmd.name() === "secrets");
+  const secrets: Command = existing ?? program.command("secrets").description("Local secrets maintenance commands");
 
   secrets
     .command("generate-local-master-key")
