@@ -1654,25 +1654,45 @@ export function buildInvocationEnvForLogs(
   return redactEnvForLogs(merged);
 }
 
-export function buildPaperclipEnv(agent: { id: string; companyId: string }): Record<string, string> {
-  const resolveHostForUrl = (rawHost: string): string => {
-    const host = rawHost.trim();
-    if (!host || host === "0.0.0.0" || host === "::") return "localhost";
-    if (host.includes(":") && !host.startsWith("[") && !host.endsWith("]")) return `[${host}]`;
-    return host;
-  };
+function resolvePaperclipUrlHost(rawHost: string): string {
+  const host = rawHost.trim();
+  if (!host || host === "0.0.0.0" || host === "::") return "localhost";
+  if (host.includes(":") && !host.startsWith("[") && !host.endsWith("]")) return `[${host}]`;
+  return host;
+}
+
+function buildPaperclipListenApiUrl(): string {
+  const runtimeHost = resolvePaperclipUrlHost(
+    process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost",
+  );
+  const runtimePort = process.env.PAPERCLIP_LISTEN_PORT?.trim() || process.env.PORT?.trim() || "3100";
+  return `http://${runtimeHost}:${runtimePort}`;
+}
+
+function resolveDirectPaperclipListenApiUrl(): string | null {
+  const rawHost = process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST;
+  const rawPort = process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT;
+  if ((!rawHost || rawHost.trim().length === 0) && (!rawPort || rawPort.trim().length === 0)) {
+    return null;
+  }
+  return buildPaperclipListenApiUrl();
+}
+
+export function buildPaperclipEnv(
+  agent: { id: string; companyId: string },
+  options: { preferLocalRuntimeApiUrl?: boolean } = {},
+): Record<string, string> {
   const vars: Record<string, string> = {
     PAPERCLIP_AGENT_ID: agent.id,
     PAPERCLIP_COMPANY_ID: agent.companyId,
   };
-  const runtimeHost = resolveHostForUrl(
-    process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost",
-  );
-  const runtimePort = process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT ?? "3100";
+  const runtimeApiUrl = process.env.PAPERCLIP_RUNTIME_API_URL?.trim() || "";
+  const configuredApiUrl = process.env.PAPERCLIP_API_URL?.trim() || "";
+  const resolvedConfiguredApiUrl = runtimeApiUrl || configuredApiUrl || buildPaperclipListenApiUrl();
   const apiUrl =
-    process.env.PAPERCLIP_RUNTIME_API_URL ??
-    process.env.PAPERCLIP_API_URL ??
-    `http://${runtimeHost}:${runtimePort}`;
+    options.preferLocalRuntimeApiUrl
+      ? resolveDirectPaperclipListenApiUrl() ?? resolvedConfiguredApiUrl
+      : resolvedConfiguredApiUrl;
   vars.PAPERCLIP_API_URL = apiUrl;
   return vars;
 }
