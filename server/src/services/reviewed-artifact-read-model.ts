@@ -624,7 +624,7 @@ export function reviewedArtifactReadModelService(db: Db) {
         const attachment = sourceVisibility.kind === "missing"
           ? null
           : await getAttachment(context.companyId, item.source.attachmentId);
-        if (!attachment) {
+        if (!attachment || attachment.issueId !== item.source.issueId) {
           return {
             artifact: withBaseResolvedArtifact(item, {
               sourceIssue: toIssueSummary(sourceIssue),
@@ -678,7 +678,11 @@ export function reviewedArtifactReadModelService(db: Db) {
         const workProduct = sourceVisibility.kind === "missing"
           ? null
           : await workProducts.getById(item.source.workProductId);
-        if (!workProduct || workProduct.companyId !== context.companyId) {
+        if (
+          !workProduct ||
+          workProduct.companyId !== context.companyId ||
+          workProduct.issueId !== item.source.issueId
+        ) {
           return {
             artifact: withBaseResolvedArtifact(item, {
               sourceIssue: toIssueSummary(sourceIssue),

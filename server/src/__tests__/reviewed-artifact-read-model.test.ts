@@ -466,6 +466,141 @@ describeEmbeddedPostgres("reviewedArtifactReadModelService", () => {
     }));
   });
 
+  it("treats spoofed attachment and work-product ids as missing on the declared source issue", async () => {
+    const companyId = randomUUID();
+    const reviewIssueId = randomUUID();
+    const claimedSourceIssueId = randomUUID();
+    const hiddenIssueId = randomUUID();
+    const assetId = randomUUID();
+    const attachmentId = randomUUID();
+    const workProductId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: issuePrefix(companyId),
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(issues).values([
+      {
+        id: reviewIssueId,
+        companyId,
+        title: "Review packet",
+        status: "in_review",
+        priority: "high",
+        identifier: "PAP-1765",
+      },
+      {
+        id: claimedSourceIssueId,
+        companyId,
+        title: "Claimed source issue",
+        status: "in_progress",
+        priority: "medium",
+        identifier: "PAP-1766",
+      },
+      {
+        id: hiddenIssueId,
+        companyId,
+        title: "Hidden source issue",
+        status: "in_progress",
+        priority: "medium",
+        identifier: "PAP-1767",
+      },
+    ]);
+    await db.insert(assets).values({
+      id: assetId,
+      companyId,
+      provider: "local_disk",
+      objectKey: `issues/${hiddenIssueId}/secret.png`,
+      contentType: "image/png",
+      byteSize: 2048,
+      sha256: "sha-secret-attachment",
+      originalFilename: "secret.png",
+    });
+    await db.insert(issueAttachments).values({
+      id: attachmentId,
+      companyId,
+      issueId: hiddenIssueId,
+      assetId,
+    });
+    await db.insert(issueWorkProducts).values({
+      id: workProductId,
+      companyId,
+      issueId: hiddenIssueId,
+      type: "artifact",
+      provider: "paperclip",
+      title: "Hidden preview",
+      url: "https://example.com/hidden-preview",
+      status: "ready_for_review",
+      reviewState: "needs_board_review",
+      metadata: {
+        previewMode: "link",
+        previewUrl: "https://example.com/hidden-preview",
+      },
+    });
+
+    await persistence.createSet({
+      companyId,
+      context: { type: "issue_review", issueId: reviewIssueId },
+      title: "Board review packet",
+      items: [
+        {
+          source: { type: "issue_attachment", issueId: claimedSourceIssueId, attachmentId },
+          displayHint: "image",
+          selectedExplicitly: true,
+        },
+        {
+          source: { type: "issue_work_product", issueId: claimedSourceIssueId, workProductId },
+          displayHint: "link",
+          selectedExplicitly: true,
+        },
+      ],
+    });
+
+    const response = await readModel.getForIssue({
+      companyId,
+      issueId: reviewIssueId,
+      actorType: "agent",
+      canReadSourceIssue: async (issue) => issue.id !== hiddenIssueId,
+    });
+
+    expect(response.contextType).toBe("issue_review");
+    expect(response.errors).toEqual([]);
+    expect(response.artifacts).toHaveLength(2);
+    expect(response.artifacts[0]).toEqual(expect.objectContaining({
+      sourceType: "issue_attachment",
+      sourceIssue: expect.objectContaining({
+        id: claimedSourceIssueId,
+        identifier: "PAP-1766",
+      }),
+      title: "Missing attachment",
+      resolution: expect.objectContaining({
+        status: "missing",
+        reason: "Issue attachment not found.",
+      }),
+      preview: expect.objectContaining({
+        mode: "unsupported",
+        previewable: false,
+      }),
+    }));
+    expect(response.artifacts[1]).toEqual(expect.objectContaining({
+      sourceType: "issue_work_product",
+      sourceIssue: expect.objectContaining({
+        id: claimedSourceIssueId,
+        identifier: "PAP-1766",
+      }),
+      title: "Missing work product",
+      resolution: expect.objectContaining({
+        status: "missing",
+        reason: "Issue work product not found.",
+      }),
+      preview: expect.objectContaining({
+        mode: "unsupported",
+        previewable: false,
+      }),
+    }));
+  });
+
   it("filters approval fallback suggestions to linked issues the actor can read", async () => {
     const companyId = randomUUID();
     const visibleIssueId = randomUUID();
