@@ -1034,7 +1034,7 @@ export function routineService(
     return map;
   }
 
-  async function listLiveIssueByRoutineIds(companyId: string, routineIds: string[]) {
+  async function listActiveIssueByRoutineIds(companyId: string, routineIds: string[]) {
     if (routineIds.length === 0) return new Map<string, RoutineListItem["activeIssue"]>();
     const executionBoundRows = await db
       .selectDistinctOn([issues.originId], {
@@ -1104,6 +1104,36 @@ export function routineService(
         .orderBy(issues.originId, desc(issues.updatedAt), desc(issues.createdAt));
 
       for (const row of legacyRows) {
+        if (!row.originId) continue;
+        rowsByOriginId.set(row.originId, row);
+      }
+    }
+
+    const blockedRoutineIds = routineIds.filter((routineId) => !rowsByOriginId.has(routineId));
+    if (blockedRoutineIds.length > 0) {
+      const blockedRows = await db
+        .selectDistinctOn([issues.originId], {
+          originId: issues.originId,
+          id: issues.id,
+          identifier: issues.identifier,
+          title: issues.title,
+          status: issues.status,
+          priority: issues.priority,
+          updatedAt: issues.updatedAt,
+        })
+        .from(issues)
+        .where(
+          and(
+            eq(issues.companyId, companyId),
+            eq(issues.originKind, "routine_execution"),
+            inArray(issues.originId, blockedRoutineIds),
+            eq(issues.status, "blocked"),
+            isNull(issues.hiddenAt),
+          ),
+        )
+        .orderBy(issues.originId, desc(issues.updatedAt), desc(issues.createdAt));
+
+      for (const row of blockedRows) {
         if (!row.originId) continue;
         rowsByOriginId.set(row.originId, row);
       }
@@ -1225,7 +1255,7 @@ export function routineService(
     );
   }
 
-  async function findLiveExecutionIssue(
+  async function findActiveExecutionIssue(
     routine: typeof routines.$inferSelect,
     executor: Db = db,
     dispatchFingerprint?: string | null,
@@ -1259,7 +1289,7 @@ export function routineService(
       .then((rows) => rows[0]?.issues ?? null);
     if (executionBoundIssue) return executionBoundIssue;
 
-    return executor
+    const legacyExecutionBoundIssue = await executor
       .select()
       .from(issues)
       .innerJoin(
@@ -1283,6 +1313,26 @@ export function routineService(
       .orderBy(desc(issues.updatedAt), desc(issues.createdAt))
       .limit(1)
       .then((rows) => rows[0]?.issues ?? null);
+    if (legacyExecutionBoundIssue) return legacyExecutionBoundIssue;
+
+    // Blocked routine execution issues still represent the active waiting path
+    // for the routine even after the status transition clears executionRunId.
+    return executor
+      .select()
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, routine.companyId),
+          eq(issues.originKind, originKind),
+          eq(issues.originId, originId),
+          eq(issues.status, "blocked"),
+          isNull(issues.hiddenAt),
+          ...(fingerprintCondition ? [fingerprintCondition] : []),
+        ),
+      )
+      .orderBy(desc(issues.updatedAt), desc(issues.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
   }
 
   async function finalizeRun(runId: string, patch: Partial<typeof routineRuns.$inferInsert>, executor: Db = db) {
@@ -1572,7 +1622,7 @@ export function routineService(
 
       let createdIssue: Awaited<ReturnType<typeof issueSvc.create>> | null = null;
       try {
-        const activeIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
+        const activeIssue = await findActiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
           kind: issueOriginKind,
           id: issueOriginId,
         });
@@ -1639,7 +1689,7 @@ export function routineService(
             throw error;
           }
 
-          const existingIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
+          const existingIssue = await findActiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
             kind: issueOriginKind,
             id: issueOriginId,
           });
@@ -1767,7 +1817,7 @@ export function routineService(
       const [triggersByRoutine, latestRunByRoutine, activeIssueByRoutine, managedByRoutine] = await Promise.all([
         listTriggersForRoutineIds(companyId, routineIds),
         listLatestRunByRoutineIds(companyId, routineIds),
-        listLiveIssueByRoutineIds(companyId, routineIds),
+        listActiveIssueByRoutineIds(companyId, routineIds),
         listManagedRoutineMetadata(routineIds),
       ]);
       return rows.map((row) => ({
@@ -1873,7 +1923,7 @@ export function routineService(
                 : null,
             })),
           ),
-        findLiveExecutionIssue(row),
+        findActiveExecutionIssue(row),
         listManagedRoutineMetadata([row.id]),
       ]);
 
