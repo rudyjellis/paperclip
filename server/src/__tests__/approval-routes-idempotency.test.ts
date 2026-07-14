@@ -39,6 +39,7 @@ function registerModuleMocks() {
     heartbeatService: () => mockHeartbeatService,
     issueApprovalService: () => mockIssueApprovalService,
     logActivity: mockLogActivity,
+    reviewedArtifactReadModelService: () => ({}),
     secretService: () => mockSecretService,
   }));
 }

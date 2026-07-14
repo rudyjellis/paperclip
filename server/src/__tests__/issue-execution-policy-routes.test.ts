@@ -115,6 +115,7 @@ function registerModuleMocks() {
       getActiveForIssue: vi.fn(async () => null),
       listActiveForIssues: vi.fn(async () => new Map()),
     }),
+    reviewedArtifactReadModelService: () => ({}),
     issueService: () => mockIssueService,
     issueThreadInteractionService: () => mockIssueThreadInteractionService,
     logActivity: mockLogActivity,

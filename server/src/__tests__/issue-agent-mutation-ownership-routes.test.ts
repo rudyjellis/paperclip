@@ -214,6 +214,7 @@ function registerRouteMocks() {
       syncDocument: async () => undefined,
       syncIssue: async () => undefined,
     }),
+    reviewedArtifactReadModelService: () => ({}),
     issueService: () => mockIssueService,
     issueThreadInteractionService: () => mockIssueThreadInteractionService,
     taskWatchdogService: () => mockTaskWatchdogService,

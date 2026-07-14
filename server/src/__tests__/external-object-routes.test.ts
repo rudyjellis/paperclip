@@ -71,6 +71,7 @@ function registerRouteMocks() {
     issueReferenceService: () => ({
       listIssueReferenceSummary: async () => ({ outbound: [], inbound: [] }),
     }),
+    reviewedArtifactReadModelService: () => ({}),
     issueService: () => mockIssueService,
     issueThreadInteractionService: () => ({}),
     logActivity: vi.fn(async () => undefined),

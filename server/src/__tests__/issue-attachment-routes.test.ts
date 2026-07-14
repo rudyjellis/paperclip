@@ -97,6 +97,7 @@ function registerRouteMocks() {
       getActiveForIssue: vi.fn(async () => null),
       listActiveForIssues: vi.fn(async () => new Map()),
     }),
+    reviewedArtifactReadModelService: () => ({}),
     issueService: () => mockIssueService,
     logActivity: mockLogActivity,
     projectService: () => ({}),

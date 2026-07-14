@@ -140,6 +140,7 @@ function registerModuleMocks() {
       listActiveForIssues: vi.fn(async () => new Map()),
     }),
     issueReferenceService: () => mockIssueReferenceService,
+    reviewedArtifactReadModelService: () => ({}),
     issueService: () => mockIssueService,
     issueThreadInteractionService: () => ({
       expireRequestConfirmationsSupersededByComment: vi.fn(async () => []),
