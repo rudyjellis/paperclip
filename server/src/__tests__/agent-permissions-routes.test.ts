@@ -87,6 +87,10 @@ const mockIssueApprovalService = vi.hoisted(() => ({
 
 const mockIssueService = vi.hoisted(() => ({
   list: vi.fn(),
+  listDependencyReadiness: vi.fn(),
+}));
+const mockIssueRecoveryActionService = vi.hoisted(() => ({
+  listActiveForIssues: vi.fn(),
 }));
 
 const mockSecretService = vi.hoisted(() => ({
@@ -200,6 +204,7 @@ function registerModuleMocks() {
     heartbeatService: () => mockHeartbeatService,
     ISSUE_LIST_DEFAULT_LIMIT: 500,
     issueApprovalService: () => mockIssueApprovalService,
+    issueRecoveryActionService: () => mockIssueRecoveryActionService,
     issueService: () => mockIssueService,
     logActivity: mockLogActivity,
     secretService: () => mockSecretService,
@@ -328,7 +333,9 @@ describe.sequential("agent permission routes", () => {
     mockHeartbeatService.cancelRun.mockReset();
     mockHeartbeatService.cancelInvocationsForAgents.mockReset();
     mockIssueApprovalService.linkManyForApproval.mockReset();
+    mockIssueRecoveryActionService.listActiveForIssues.mockReset();
     mockIssueService.list.mockReset();
+    mockIssueService.listDependencyReadiness.mockReset();
     mockSecretService.normalizeAdapterConfigForPersistence.mockReset();
     mockSecretService.resolveAdapterConfigForRuntime.mockReset();
     mockAgentInstructionsService.materializeManagedBundle.mockReset();
@@ -402,6 +409,8 @@ describe.sequential("agent permission routes", () => {
     mockInstanceSettingsService.getGeneral.mockResolvedValue({
       censorUsernameInLogs: false,
     });
+    mockIssueRecoveryActionService.listActiveForIssues.mockResolvedValue(new Map());
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map());
     mockLogActivity.mockResolvedValue(undefined);
   });
 
@@ -1678,11 +1687,132 @@ describe.sequential("agent permission routes", () => {
     });
   });
 
+  it("marks active-child blocked parents as not ready in inbox-lite", async () => {
+    mockIssueService.list.mockResolvedValue([
+      {
+        id: "issue-1",
+        identifier: "PAP-1338",
+        title: "Blocked parent",
+        status: "blocked",
+        priority: "high",
+        projectId: "project-1",
+        goalId: "goal-1",
+        parentId: null,
+        updatedAt: "2026-05-21T17:00:00.000Z",
+        activeRun: null,
+        blockerAttention: {
+          state: "covered",
+          reason: "active_child",
+          unresolvedBlockerCount: 1,
+          coveredBlockerCount: 1,
+          stalledBlockerCount: 0,
+          attentionBlockerCount: 0,
+          sampleBlockerIdentifier: "PAP-1339",
+          sampleStalledBlockerIdentifier: null,
+        },
+      },
+    ]);
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map([
+      ["issue-1", {
+        issueId: "issue-1",
+        blockerIssueIds: [],
+        unresolvedBlockerIssueIds: [],
+        unresolvedBlockerCount: 0,
+        allBlockersDone: true,
+        isDependencyReady: true,
+      }],
+    ]));
+
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: "run-1",
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/agents/me/inbox-lite"));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({
+        id: "issue-1",
+        identifier: "PAP-1338",
+        dependencyReady: false,
+        unresolvedBlockerCount: 1,
+        unresolvedBlockerIssueIds: [],
+      }),
+    ]);
+    expect(mockIssueService.list).toHaveBeenCalledWith(companyId, {
+      assigneeAgentId: agentId,
+      status: "todo,in_progress,blocked",
+      includeRoutineExecutions: true,
+      limit: 500,
+    });
+    expect(mockIssueService.listDependencyReadiness).toHaveBeenCalledWith(companyId, ["issue-1"]);
+  });
+
+  it("marks stalled-review child paths as not ready in inbox-lite", async () => {
+    mockIssueService.list.mockResolvedValue([
+      {
+        id: "issue-2",
+        identifier: "PAP-1340",
+        title: "Blocked parent waiting on stalled child review",
+        status: "blocked",
+        priority: "high",
+        projectId: "project-1",
+        goalId: "goal-1",
+        parentId: null,
+        updatedAt: "2026-05-22T02:40:30.000Z",
+        activeRun: null,
+        blockerAttention: {
+          state: "stalled",
+          reason: "stalled_review",
+          unresolvedBlockerCount: 1,
+          coveredBlockerCount: 0,
+          stalledBlockerCount: 1,
+          attentionBlockerCount: 0,
+          sampleBlockerIdentifier: "PAP-1338",
+          sampleStalledBlockerIdentifier: "PAP-1338",
+        },
+      },
+    ]);
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map([
+      ["issue-2", {
+        issueId: "issue-2",
+        blockerIssueIds: [],
+        unresolvedBlockerIssueIds: [],
+        unresolvedBlockerCount: 0,
+        allBlockersDone: true,
+        isDependencyReady: true,
+      }],
+    ]));
+
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: "run-1",
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/agents/me/inbox-lite"));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({
+        id: "issue-2",
+        identifier: "PAP-1340",
+        dependencyReady: false,
+        unresolvedBlockerCount: 1,
+        unresolvedBlockerIssueIds: [],
+      }),
+    ]);
+    expect(mockIssueService.listDependencyReadiness).toHaveBeenCalledWith(companyId, ["issue-2"]);
+  });
+
   describe("agent configuration read gate", () => {
     it("allows a board member without agents:create to read agent configuration", async () => {
-      // Board (human) users with company membership but no agents:create
-      // grant should still be able to view agent configuration — this is
-      // the read-only permission loosening introduced by this PR.
       mockAccessService.canUser.mockResolvedValue(false);
       mockAccessService.hasPermission.mockResolvedValue(false);
 
@@ -1700,10 +1830,6 @@ describe.sequential("agent permission routes", () => {
     });
 
     it("denies an agent actor without agents:create when reading peer config", async () => {
-      // Agent actors must still pass the agents:create gate (explicit
-      // grant OR canCreateAgents permission on the agent record). A peer
-      // agent in the same company without that permission must not be
-      // able to read another agent's configuration.
       const peerAgentId = "33333333-3333-4333-8333-333333333333";
       const peerAgent = { ...baseAgent, id: peerAgentId };
       mockAgentService.getById.mockImplementation(async (id: string) => {
@@ -1729,8 +1855,6 @@ describe.sequential("agent permission routes", () => {
     });
 
     it("allows an agent actor with agents:create grant to read peer config", async () => {
-      // When an agent actor has an explicit agents:create grant in the
-      // access service, the read gate must let them through.
       const peerAgentId = "44444444-4444-4444-8444-444444444444";
       const peerAgent = { ...baseAgent, id: peerAgentId };
       mockAgentService.getById.mockImplementation(async (id: string) => {

@@ -415,7 +415,10 @@ type IssueWithLabels = IssueRow & {
   labelIds: string[];
   watchdog?: IssueWatchdogSummary | null;
 };
-type IssueWithLabelsAndRun = IssueWithLabels & { activeRun: IssueActiveRunRow | null };
+type IssueWithLabelsAndRun = IssueWithLabels & {
+  activeRun: IssueActiveRunRow | null;
+  blockerAttention?: IssueBlockerAttention;
+};
 type IssueUserCommentStats = {
   issueId: string;
   myLastCommentAt: Date | null;

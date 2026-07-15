@@ -1991,22 +1991,32 @@ export function agentRoutes(
     ]);
 
     res.json(
-      rows.map((issue) => ({
-        id: issue.id,
-        identifier: issue.identifier,
-        title: issue.title,
-        status: issue.status,
-        priority: issue.priority,
-        projectId: issue.projectId,
-        goalId: issue.goalId,
-        parentId: issue.parentId,
-        updatedAt: issue.updatedAt,
-        activeRun: issue.activeRun,
-        activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
-        dependencyReady: dependencyReadiness.get(issue.id)?.isDependencyReady ?? true,
-        unresolvedBlockerCount: dependencyReadiness.get(issue.id)?.unresolvedBlockerCount ?? 0,
-        unresolvedBlockerIssueIds: dependencyReadiness.get(issue.id)?.unresolvedBlockerIssueIds ?? [],
-      })),
+      rows.map((issue) => {
+        const readiness = dependencyReadiness.get(issue.id);
+        const childDrivenBlocked = issue.status === "blocked"
+          && (readiness?.unresolvedBlockerCount ?? 0) === 0
+          && (issue.blockerAttention?.unresolvedBlockerCount ?? 0) > 0;
+        const unresolvedBlockerCount = childDrivenBlocked
+          ? Math.max(readiness?.unresolvedBlockerCount ?? 0, issue.blockerAttention?.unresolvedBlockerCount ?? 0)
+          : (readiness?.unresolvedBlockerCount ?? 0);
+
+        return {
+          id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          status: issue.status,
+          priority: issue.priority,
+          projectId: issue.projectId,
+          goalId: issue.goalId,
+          parentId: issue.parentId,
+          updatedAt: issue.updatedAt,
+          activeRun: issue.activeRun,
+          activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
+          dependencyReady: (readiness?.isDependencyReady ?? true) && !childDrivenBlocked,
+          unresolvedBlockerCount,
+          unresolvedBlockerIssueIds: readiness?.unresolvedBlockerIssueIds ?? [],
+        };
+      }),
     );
   });
 
