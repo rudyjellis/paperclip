@@ -281,6 +281,25 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     });
     expect(run).not.toBeNull();
 
+    const readPersistedAdapterFailure = async () => {
+      const state = await db
+        .select()
+        .from(agentRuntimeState)
+        .where(eq(agentRuntimeState.agentId, agentId))
+        .then((rows) => rows[0] ?? null);
+      const runRow = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, run!.id))
+        .then((rows) => rows[0] ?? null);
+      const costEvent = await db
+        .select()
+        .from(costEvents)
+        .where(eq(costEvents.heartbeatRunId, run!.id))
+        .then((rows) => rows[0] ?? null);
+      return { state, runRow, costEvent };
+    };
+
     await waitForRunSettlement({
       db,
       runId: run!.id,
@@ -290,11 +309,17 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
       requireRuntimeState: true,
     });
 
-    const state = await db
-      .select()
-      .from(agentRuntimeState)
-      .where(eq(agentRuntimeState.agentId, agentId))
-      .then((rows) => rows[0] ?? null);
+    await waitFor(async () => {
+      const { state, runRow, costEvent } = await readPersistedAdapterFailure();
+      return (
+        state?.lastRunStatus === "failed" &&
+        typeof state.lastError === "string" &&
+        typeof runRow?.error === "string" &&
+        costEvent != null
+      );
+    });
+
+    const { state, runRow, costEvent } = await readPersistedAdapterFailure();
     expect(state?.lastError).toContain(`PAPERCLIP_API_KEY=${RUN_LOG_CREDENTIAL_REDACTION_TOKEN}`);
     expect(state?.lastError).toContain(`Authorization: Bearer ${RUN_LOG_CREDENTIAL_REDACTION_TOKEN}`);
     expect(state?.lastError).not.toContain(fakeApiKey);
@@ -305,18 +330,8 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     expect(state?.totalOutputTokens).toBe(7);
     expect(state?.totalCostCents).toBe(123);
 
-    const runRow = await db
-      .select()
-      .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.id, run!.id))
-      .then((rows) => rows[0] ?? null);
     expect(runRow?.error).toEqual(state?.lastError);
 
-    const costEvent = await db
-      .select()
-      .from(costEvents)
-      .where(eq(costEvents.heartbeatRunId, run!.id))
-      .then((rows) => rows[0] ?? null);
     expect(costEvent).toMatchObject({
       provider: "redaction-test-provider",
       biller: "redaction-test-biller",
@@ -394,6 +409,25 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     });
     expect(run).not.toBeNull();
 
+    const readPersistedSetupFailure = async () => {
+      const runRow = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, run!.id))
+        .then((rows) => rows[0] ?? null);
+      const wakeup = await db
+        .select()
+        .from(agentWakeupRequests)
+        .where(eq(agentWakeupRequests.runId, run!.id))
+        .then((rows) => rows[0] ?? null);
+      const event = await db
+        .select()
+        .from(heartbeatRunEvents)
+        .where(eq(heartbeatRunEvents.runId, run!.id))
+        .then((rows) => rows.find((row) => row.eventType === "error") ?? null);
+      return { runRow, wakeup, event };
+    };
+
     await waitForRunSettlement({
       db,
       runId: run!.id,
@@ -402,21 +436,17 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
       expectedAgentStatus: "error",
     });
 
-    const runRow = await db
-      .select()
-      .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.id, run!.id))
-      .then((rows) => rows[0] ?? null);
-    const wakeup = await db
-      .select()
-      .from(agentWakeupRequests)
-      .where(eq(agentWakeupRequests.runId, run!.id))
-      .then((rows) => rows[0] ?? null);
-    const event = await db
-      .select()
-      .from(heartbeatRunEvents)
-      .where(eq(heartbeatRunEvents.runId, run!.id))
-      .then((rows) => rows.find((row) => row.eventType === "error") ?? null);
+    await waitFor(async () => {
+      const { runRow, wakeup, event } = await readPersistedSetupFailure();
+      return (
+        runRow?.status === "failed" &&
+        typeof runRow.error === "string" &&
+        typeof wakeup?.error === "string" &&
+        typeof event?.message === "string"
+      );
+    });
+
+    const { runRow, wakeup, event } = await readPersistedSetupFailure();
 
     for (const persistedMessage of [runRow?.error, wakeup?.error, event?.message]) {
       expect(persistedMessage).toContain(`PAPERCLIP_API_KEY=${RUN_LOG_CREDENTIAL_REDACTION_TOKEN}`);
