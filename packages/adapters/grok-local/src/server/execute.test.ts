@@ -43,6 +43,22 @@ async function pathExists(candidate: string): Promise<boolean> {
   return fs.access(candidate).then(() => true).catch(() => false);
 }
 
+function snapshotPaperclipUrlEnv() {
+  return {
+    PAPERCLIP_RUNTIME_API_URL: process.env.PAPERCLIP_RUNTIME_API_URL,
+    PAPERCLIP_API_URL: process.env.PAPERCLIP_API_URL,
+    PAPERCLIP_LISTEN_HOST: process.env.PAPERCLIP_LISTEN_HOST,
+    PAPERCLIP_LISTEN_PORT: process.env.PAPERCLIP_LISTEN_PORT,
+  };
+}
+
+function restorePaperclipUrlEnv(snapshot: ReturnType<typeof snapshotPaperclipUrlEnv>) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
 describe("grok_local execute", () => {
   beforeEach(() => {
     ensureRuntimeInstalledMock.mockClear();
@@ -183,5 +199,56 @@ describe("grok_local execute", () => {
     expect(runProcessMock).not.toHaveBeenCalled();
     expect(await pathExists(path.join(root, "Agents.md"))).toBe(false);
     expect(await pathExists(path.join(root, ".claude", "skills", "paperclip"))).toBe(false);
+  });
+
+  it("passes the local listen Paperclip API URL to the Grok process", async () => {
+    const root = await makeTempRoot();
+    const previousEnv = snapshotPaperclipUrlEnv();
+    let observedApiUrl: string | undefined;
+    try {
+      process.env.PAPERCLIP_RUNTIME_API_URL = "https://paperclip.example";
+      process.env.PAPERCLIP_API_URL = "https://paperclip.example";
+      process.env.PAPERCLIP_LISTEN_HOST = "127.0.0.1";
+      process.env.PAPERCLIP_LISTEN_PORT = "3101";
+
+      runProcessMock.mockImplementationOnce(async (_runId, _target, _command, _args, options) => {
+        observedApiUrl = (options as { env?: Record<string, string> }).env?.PAPERCLIP_API_URL;
+        return {
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stdout: JSON.stringify({ type: "end", stopReason: "EndTurn", sessionId: "sess-1", requestId: "req-1" }),
+          stderr: "",
+        };
+      });
+
+      const result = await execute({
+        runId: "run-1",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Grok Agent",
+          adapterType: "grok_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          cwd: root,
+        },
+        context: {},
+        authToken: "run-token",
+        onLog: async () => {},
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(observedApiUrl).toBe("http://127.0.0.1:3101");
+    } finally {
+      restorePaperclipUrlEnv(previousEnv);
+    }
   });
 });
