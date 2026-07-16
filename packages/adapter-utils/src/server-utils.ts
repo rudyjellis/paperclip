@@ -1654,7 +1654,10 @@ export function buildInvocationEnvForLogs(
   return redactEnvForLogs(merged);
 }
 
-export function buildPaperclipEnv(agent: { id: string; companyId: string }): Record<string, string> {
+export function buildPaperclipEnv(
+  agent: { id: string; companyId: string },
+  options: { preferLocalListenUrl?: boolean } = {},
+): Record<string, string> {
   const resolveHostForUrl = (rawHost: string): string => {
     const host = rawHost.trim();
     if (!host || host === "0.0.0.0" || host === "::") return "localhost";
@@ -1671,7 +1674,7 @@ export function buildPaperclipEnv(agent: { id: string; companyId: string }): Rec
   const hasExplicitListenPort =
     typeof process.env.PAPERCLIP_LISTEN_PORT === "string" || typeof process.env.PORT === "string";
   const apiUrl =
-    (hasExplicitListenPort ? localApiUrl : null) ??
+    (options.preferLocalListenUrl && hasExplicitListenPort ? localApiUrl : null) ??
     process.env.PAPERCLIP_RUNTIME_API_URL ??
     process.env.PAPERCLIP_API_URL ??
     localApiUrl;

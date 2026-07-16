@@ -399,6 +399,14 @@ describe("openclaw gateway adapter execute", () => {
   it("runs connect -> agent -> agent.wait and forwards wake payload", async () => {
     const gateway = await createMockGatewayServer();
     const logs: string[] = [];
+    const previousRuntimeApiUrl = process.env.PAPERCLIP_RUNTIME_API_URL;
+    const previousApiUrl = process.env.PAPERCLIP_API_URL;
+    const previousListenHost = process.env.PAPERCLIP_LISTEN_HOST;
+    const previousListenPort = process.env.PAPERCLIP_LISTEN_PORT;
+    process.env.PAPERCLIP_RUNTIME_API_URL = "https://paperclip.example";
+    process.env.PAPERCLIP_API_URL = "https://paperclip.example";
+    process.env.PAPERCLIP_LISTEN_HOST = "127.0.0.1";
+    process.env.PAPERCLIP_LISTEN_PORT = "3101";
 
     try {
       const result = await execute(
@@ -491,6 +499,7 @@ describe("openclaw gateway adapter execute", () => {
       expect(payload?.idempotencyKey).toBe("run-123");
       expect(payload?.sessionKey).toBe("paperclip:issue:issue-123");
       expect(String(payload?.message ?? "")).toContain("wake now");
+      expect(String(payload?.message ?? "")).toContain("PAPERCLIP_API_URL=https://paperclip.example");
       expect(String(payload?.message ?? "")).toContain("PAPERCLIP_RUN_ID=run-123");
       expect(String(payload?.message ?? "")).toContain("PAPERCLIP_TASK_ID=task-123");
       expect(String(payload?.message ?? "")).toContain("## Paperclip Wake Payload");
@@ -507,6 +516,14 @@ describe("openclaw gateway adapter execute", () => {
 
       expect(logs.some((entry) => entry.includes("[openclaw-gateway:event] run=run-123 stream=assistant"))).toBe(true);
     } finally {
+      if (previousRuntimeApiUrl === undefined) delete process.env.PAPERCLIP_RUNTIME_API_URL;
+      else process.env.PAPERCLIP_RUNTIME_API_URL = previousRuntimeApiUrl;
+      if (previousApiUrl === undefined) delete process.env.PAPERCLIP_API_URL;
+      else process.env.PAPERCLIP_API_URL = previousApiUrl;
+      if (previousListenHost === undefined) delete process.env.PAPERCLIP_LISTEN_HOST;
+      else process.env.PAPERCLIP_LISTEN_HOST = previousListenHost;
+      if (previousListenPort === undefined) delete process.env.PAPERCLIP_LISTEN_PORT;
+      else process.env.PAPERCLIP_LISTEN_PORT = previousListenPort;
       await gateway.close();
     }
   });
