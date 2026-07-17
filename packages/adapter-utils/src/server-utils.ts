@@ -1654,7 +1654,10 @@ export function buildInvocationEnvForLogs(
   return redactEnvForLogs(merged);
 }
 
-export function buildPaperclipEnv(agent: { id: string; companyId: string }): Record<string, string> {
+export function buildPaperclipEnv(
+  agent: { id: string; companyId: string },
+  options: { preferLocalListenUrl?: boolean } = {},
+): Record<string, string> {
   const resolveHostForUrl = (rawHost: string): string => {
     const host = rawHost.trim();
     if (!host || host === "0.0.0.0" || host === "::") return "localhost";
@@ -1665,14 +1668,16 @@ export function buildPaperclipEnv(agent: { id: string; companyId: string }): Rec
     PAPERCLIP_AGENT_ID: agent.id,
     PAPERCLIP_COMPANY_ID: agent.companyId,
   };
-  const runtimeHost = resolveHostForUrl(
-    process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost",
-  );
-  const runtimePort = process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT ?? "3100";
+  const listenHost = process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost";
+  const listenPort = process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT ?? "3100";
+  const localApiUrl = `http://${resolveHostForUrl(listenHost)}:${listenPort}`;
+  const hasExplicitListenPort =
+    typeof process.env.PAPERCLIP_LISTEN_PORT === "string" || typeof process.env.PORT === "string";
   const apiUrl =
+    (options.preferLocalListenUrl && hasExplicitListenPort ? localApiUrl : null) ??
     process.env.PAPERCLIP_RUNTIME_API_URL ??
     process.env.PAPERCLIP_API_URL ??
-    `http://${runtimeHost}:${runtimePort}`;
+    localApiUrl;
   vars.PAPERCLIP_API_URL = apiUrl;
   return vars;
 }

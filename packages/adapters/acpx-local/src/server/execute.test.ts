@@ -1,9 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import type { AcpRuntimeOptions } from "acpx/runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAcpxLocalExecutor } from "./execute.js";
+
+type AcpRuntimeOptions = Record<string, unknown>;
+
+vi.mock("acpx/runtime", () => ({
+  createAcpRuntime: vi.fn(),
+  createAgentRegistry: vi.fn(() => ({})),
+  createRuntimeStore: vi.fn(() => ({})),
+  isAcpRuntimeError: vi.fn(() => false),
+}));
 
 const tempRoots: string[] = [];
 
@@ -37,6 +45,22 @@ async function createSkill(root: string, name: string, body = `---\nrequired: fa
     source: skillDir,
     required: false,
   };
+}
+
+function snapshotPaperclipUrlEnv() {
+  return {
+    PAPERCLIP_RUNTIME_API_URL: process.env.PAPERCLIP_RUNTIME_API_URL,
+    PAPERCLIP_API_URL: process.env.PAPERCLIP_API_URL,
+    PAPERCLIP_LISTEN_HOST: process.env.PAPERCLIP_LISTEN_HOST,
+    PAPERCLIP_LISTEN_PORT: process.env.PAPERCLIP_LISTEN_PORT,
+  };
+}
+
+function restorePaperclipUrlEnv(snapshot: ReturnType<typeof snapshotPaperclipUrlEnv>) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 }
 
 function buildRuntime() {
@@ -541,6 +565,37 @@ describe("acpx_local runtime skill isolation", () => {
     } finally {
       if (previousApiKey === undefined) delete process.env.PAPERCLIP_API_KEY;
       else process.env.PAPERCLIP_API_KEY = previousApiKey;
+    }
+  });
+
+  it("writes the local listen Paperclip API URL into ACPX wrappers", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "state");
+    const previousEnv = snapshotPaperclipUrlEnv();
+    try {
+      process.env.PAPERCLIP_RUNTIME_API_URL = "https://paperclip.example";
+      process.env.PAPERCLIP_API_URL = "https://paperclip.example";
+      process.env.PAPERCLIP_LISTEN_HOST = "127.0.0.1";
+      process.env.PAPERCLIP_LISTEN_PORT = "3101";
+
+      await runExecutor({
+        agent: "custom-a",
+        agentCommand: "node ./fake-acp.js",
+        stateDir,
+      });
+
+      const wrappers = await fs.readdir(path.join(stateDir, "wrappers"));
+      const envPath = path.join(
+        stateDir,
+        "wrappers",
+        wrappers.find((name) => name.endsWith(".env"))!,
+      );
+      const env = await fs.readFile(envPath, "utf8");
+
+      expect(env).toContain("PAPERCLIP_API_URL='http://127.0.0.1:3101'");
+      expect(env).not.toContain("PAPERCLIP_API_URL='https://paperclip.example'");
+    } finally {
+      restorePaperclipUrlEnv(previousEnv);
     }
   });
 

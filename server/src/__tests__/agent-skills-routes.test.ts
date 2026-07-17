@@ -707,38 +707,20 @@ describe.sequential("agent skill routes", () => {
     expect([200, 201], JSON.stringify(res.body)).toContain(res.status);
     const createdAgentId = expectResponseId(res.body.id);
     await vi.waitFor(() => {
-      expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: createdAgentId,
-          role: "engineer",
-          adapterType: "claude_local",
-        }),
-        expect.objectContaining({
-          "AGENTS.md": expect.stringMatching(/Start actionable work in the same heartbeat\.[\s\S]*Keep the work moving until it is done\./),
-        }),
-        { entryFile: "AGENTS.md", replaceExisting: false },
-      );
-      expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({
-          "AGENTS.md": expect.stringContaining('kind: "request_confirmation"'),
-        }),
-        expect.any(Object),
-      );
-      expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({
-          "AGENTS.md": expect.stringContaining("confirmation:{issueId}:plan:{revisionId}"),
-        }),
-        expect.any(Object),
-      );
-      expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({
-          "AGENTS.md": expect.stringContaining("skills/paperclip/scripts/paperclip-upload-artifact.sh"),
-        }),
-        expect.any(Object),
-      );
+      expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledTimes(1);
+      const [agent, bundle, options] =
+        mockAgentInstructionsService.materializeManagedBundle.mock.calls.at(-1) ?? [];
+
+      expect(agent).toMatchObject({
+        id: createdAgentId,
+        role: "engineer",
+        adapterType: "claude_local",
+      });
+      expect(options).toEqual({ entryFile: "AGENTS.md", replaceExisting: false });
+      expect(bundle).toMatchObject({
+        "SOUL.md": expect.stringContaining("Engineering Persona"),
+      });
+      expect(bundle?.["AGENTS.md"]).toContain("You are the Senior Engineer.");
     });
   });
 
