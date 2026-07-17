@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
@@ -77,6 +77,103 @@ async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error("Timed out waiting for condition");
+}
+
+async function waitForRunSettlement(input: {
+  db: ReturnType<typeof createDb>;
+  runId: string;
+  agentId: string;
+  expectedRunStatus: "failed" | "succeeded" | "cancelled" | "timed_out";
+  expectedAgentStatus: "idle" | "error";
+  requireRuntimeState?: boolean;
+}) {
+  let lastActivityCount: number | null = null;
+  let stableSince: number | null = null;
+  const expectedWakeupStatus = input.expectedRunStatus === "succeeded" ? "completed" : input.expectedRunStatus;
+
+  await waitFor(async () => {
+    const [runRow, wakeup, agentRow, runtimeState, activityCountRow] = await Promise.all([
+      input.db
+        .select({
+          status: heartbeatRuns.status,
+        })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, input.runId))
+        .then((rows) => rows[0] ?? null),
+      input.db
+        .select({
+          status: agentWakeupRequests.status,
+        })
+        .from(agentWakeupRequests)
+        .where(eq(agentWakeupRequests.runId, input.runId))
+        .then((rows) => rows[0] ?? null),
+      input.db
+        .select({
+          status: agents.status,
+          lastHeartbeatAt: agents.lastHeartbeatAt,
+        })
+        .from(agents)
+        .where(eq(agents.id, input.agentId))
+        .then((rows) => rows[0] ?? null),
+      input.requireRuntimeState
+        ? input.db
+          .select({
+            lastRunId: agentRuntimeState.lastRunId,
+            lastRunStatus: agentRuntimeState.lastRunStatus,
+          })
+          .from(agentRuntimeState)
+          .where(eq(agentRuntimeState.agentId, input.agentId))
+          .then((rows) => rows[0] ?? null)
+        : Promise.resolve(null),
+      input.db
+        .select({
+          count: sql<number>`count(*)::int`,
+        })
+        .from(activityLog)
+        .where(eq(activityLog.runId, input.runId))
+        .then((rows) => rows[0]?.count ?? 0),
+    ]);
+
+    if (runRow?.status !== input.expectedRunStatus) {
+      stableSince = null;
+      lastActivityCount = null;
+      return false;
+    }
+    if (wakeup?.status !== expectedWakeupStatus) {
+      stableSince = null;
+      lastActivityCount = null;
+      return false;
+    }
+    if (agentRow?.status !== input.expectedAgentStatus || !agentRow.lastHeartbeatAt) {
+      stableSince = null;
+      lastActivityCount = null;
+      return false;
+    }
+    if (
+      input.requireRuntimeState
+      && (
+        runtimeState?.lastRunId !== input.runId
+        || runtimeState?.lastRunStatus !== input.expectedRunStatus
+      )
+    ) {
+      stableSince = null;
+      lastActivityCount = null;
+      return false;
+    }
+
+    if (lastActivityCount !== activityCountRow) {
+      lastActivityCount = activityCountRow;
+      stableSince = Date.now();
+      return false;
+    }
+
+    if (stableSince == null) {
+      stableSince = Date.now();
+      return false;
+    }
+
+    return Date.now() - stableSince >= 200;
+  });
 }
 
 describeEmbeddedPostgres("heartbeat redaction", () => {
@@ -184,13 +281,13 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     });
     expect(run).not.toBeNull();
 
-    await waitFor(async () => {
-      const state = await db
-        .select()
-        .from(agentRuntimeState)
-        .where(eq(agentRuntimeState.agentId, agentId))
-        .then((rows) => rows[0] ?? null);
-      return state?.lastRunStatus === "failed";
+    await waitForRunSettlement({
+      db,
+      runId: run!.id,
+      agentId,
+      expectedRunStatus: "failed",
+      expectedAgentStatus: "error",
+      requireRuntimeState: true,
     });
 
     const state = await db
@@ -297,13 +394,12 @@ describeEmbeddedPostgres("heartbeat redaction", () => {
     });
     expect(run).not.toBeNull();
 
-    await waitFor(async () => {
-      const runRow = await db
-        .select()
-        .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.id, run!.id))
-        .then((rows) => rows[0] ?? null);
-      return runRow?.status === "failed";
+    await waitForRunSettlement({
+      db,
+      runId: run!.id,
+      agentId,
+      expectedRunStatus: "failed",
+      expectedAgentStatus: "error",
     });
 
     const runRow = await db
