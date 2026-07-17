@@ -53,6 +53,7 @@ import {
   rejectIssueThreadInteractionSchema,
   restoreIssueDocumentRevisionSchema,
   respondIssueThreadInteractionSchema,
+  supersedeDuplicateIssueThreadInteractionSchema,
   updateIssueWorkProductSchema,
   updateDocumentAnnotationThreadSchema,
   upsertIssueDocumentSchema,
@@ -7546,6 +7547,75 @@ export function issueRoutes(
         interaction,
         actor,
         source: "issue.interaction.respond",
+      });
+
+      res.json(interaction);
+    },
+  );
+
+  router.post(
+    "/issues/:id/interactions/:interactionId/supersede-duplicate",
+    validate(supersedeDuplicateIssueThreadInteractionSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const interactionId = req.params.interactionId as string;
+      const issue = await svc.getById(id);
+      if (!issue) {
+        res.status(404).json({ error: "Issue not found" });
+        return;
+      }
+      assertCompanyAccess(req, issue.companyId);
+      if (req.actor.type !== "agent") {
+        res.status(403).json({ error: "Agent access required" });
+        return;
+      }
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+
+      const actor = getActorInfo(req);
+      const interaction = await issueThreadInteractionService(db).supersedeDuplicateQuestions(issue, interactionId, req.body, {
+        agentId: actor.agentId,
+        userId: actor.actorType === "user" ? actor.actorId : null,
+      });
+
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.thread_interaction_cancelled",
+        entityType: "issue",
+        entityId: issue.id,
+        details: {
+          interactionId: interaction.id,
+          interactionKind: interaction.kind,
+          interactionStatus: interaction.status,
+          cancellationReason:
+            interaction.kind === "ask_user_questions"
+              ? (interaction.result?.cancellationReason ?? null)
+              : null,
+          duplicateSupersessionReason:
+            interaction.kind === "ask_user_questions"
+              ? (interaction.result?.duplicateSupersession?.reason ?? null)
+              : null,
+          canonicalReplacementIssueId:
+            interaction.kind === "ask_user_questions"
+              ? (interaction.result?.duplicateSupersession?.canonicalIssueId ?? null)
+              : null,
+          canonicalReplacementInteractionId:
+            interaction.kind === "ask_user_questions"
+              ? (interaction.result?.duplicateSupersession?.canonicalInteractionId ?? null)
+              : null,
+          source: "issue.interaction.supersede_duplicate",
+        },
+      });
+
+      queueResolvedInteractionContinuationWakeup({
+        heartbeat,
+        issue,
+        interaction,
+        actor,
+        source: "issue.interaction.supersede_duplicate",
       });
 
       res.json(interaction);
