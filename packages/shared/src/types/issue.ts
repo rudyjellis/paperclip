@@ -796,6 +796,11 @@ export interface AskUserQuestionsResult {
   expirationReason?: "superseded_by_comment";
   commentId?: string | null;
   summaryMarkdown?: string | null;
+  duplicateSupersession?: {
+    reason: string;
+    canonicalIssueId?: string | null;
+    canonicalInteractionId?: string | null;
+  } | null;
 }
 
 export interface RequestConfirmationIssueDocumentTarget {

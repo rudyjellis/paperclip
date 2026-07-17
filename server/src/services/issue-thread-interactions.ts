@@ -25,6 +25,7 @@ import type {
   RespondIssueThreadInteraction,
   SuggestTasksInteraction,
   SuggestTasksResultCreatedTask,
+  SupersedeDuplicateIssueThreadInteraction,
 } from "@paperclipai/shared";
 import {
   acceptIssueThreadInteractionSchema,
@@ -39,6 +40,7 @@ import {
   requestConfirmationResultSchema,
   suggestTasksPayloadSchema,
   suggestTasksResultSchema,
+  supersedeDuplicateIssueThreadInteractionSchema,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
@@ -931,6 +933,59 @@ export function issueThreadInteractionService(db: Db) {
     return rejected;
   }
 
+  async function resolveCanonicalDuplicateSupersession(args: {
+    companyId: string;
+    interactionId: string;
+    input: SupersedeDuplicateIssueThreadInteraction;
+  }) {
+    let canonicalIssueId = args.input.canonicalIssueId ?? null;
+    const canonicalInteractionId = args.input.canonicalInteractionId ?? null;
+
+    if (canonicalIssueId) {
+      const canonicalIssue = await db
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(
+          eq(issues.companyId, args.companyId),
+          eq(issues.id, canonicalIssueId),
+        ))
+        .then((rows) => rows[0] ?? null);
+      if (!canonicalIssue) {
+        throw unprocessable("canonicalIssueId must belong to the same company");
+      }
+    }
+
+    if (canonicalInteractionId) {
+      if (canonicalInteractionId === args.interactionId) {
+        throw unprocessable("canonicalInteractionId must reference a different interaction");
+      }
+
+      const canonicalInteraction = await db
+        .select({
+          id: issueThreadInteractions.id,
+          issueId: issueThreadInteractions.issueId,
+        })
+        .from(issueThreadInteractions)
+        .where(and(
+          eq(issueThreadInteractions.companyId, args.companyId),
+          eq(issueThreadInteractions.id, canonicalInteractionId),
+        ))
+        .then((rows) => rows[0] ?? null);
+      if (!canonicalInteraction) {
+        throw unprocessable("canonicalInteractionId must belong to the same company");
+      }
+      if (canonicalIssueId && canonicalInteraction.issueId !== canonicalIssueId) {
+        throw unprocessable("canonicalInteractionId must belong to canonicalIssueId");
+      }
+      canonicalIssueId = canonicalInteraction.issueId;
+    }
+
+    return {
+      canonicalIssueId,
+      canonicalInteractionId,
+    };
+  }
+
   return {
     listForIssue: async (issueId: string) => {
       const rows = await db
@@ -1668,6 +1723,65 @@ export function issueThreadInteractionService(db: Db) {
             cancelled: true,
             cancellationReason: reason,
             summaryMarkdown: null,
+          },
+          resolvedByAgentId: actor.agentId ?? null,
+          resolvedByUserId: actor.userId ?? null,
+          resolvedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(issueThreadInteractions.id, interactionId),
+          eq(issueThreadInteractions.status, "pending"),
+        ))
+        .returning();
+
+      if (!updated) {
+        throw conflict("Interaction has already been resolved");
+      }
+
+      await touchIssue(db, issue.id);
+      const cancelled = hydrateInteraction(updated);
+      await emitInteractionResolvedTelemetry(db, cancelled);
+      return cancelled;
+    },
+
+    supersedeDuplicateQuestions: async (
+      issue: { id: string; companyId: string },
+      interactionId: string,
+      input: SupersedeDuplicateIssueThreadInteraction,
+      actor: InteractionActor,
+    ) => {
+      const data = supersedeDuplicateIssueThreadInteractionSchema.parse(input);
+      const current = await getPendingInteractionForResolution({ issue, interactionId });
+      if (current.kind !== "ask_user_questions") {
+        throw unprocessable("Only ask_user_questions interactions can be superseded as duplicates");
+      }
+      if (!current.createdByAgentId || current.createdByUserId) {
+        throw unprocessable("Only agent-authored ask_user_questions interactions can be superseded as duplicates");
+      }
+
+      const canonicalReplacement = await resolveCanonicalDuplicateSupersession({
+        companyId: issue.companyId,
+        interactionId,
+        input: data,
+      });
+
+      const reason = data.reason.trim();
+      const [updated] = await db
+        .update(issueThreadInteractions)
+        .set({
+          status: "cancelled",
+          result: {
+            version: 1,
+            answers: [],
+            cancelled: true,
+            cancellationReason: reason,
+            summaryMarkdown: null,
+            duplicateSupersession: {
+              reason,
+              canonicalIssueId: canonicalReplacement.canonicalIssueId,
+              canonicalInteractionId: canonicalReplacement.canonicalInteractionId,
+            },
           },
           resolvedByAgentId: actor.agentId ?? null,
           resolvedByUserId: actor.userId ?? null,

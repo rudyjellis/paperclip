@@ -7,6 +7,7 @@ const CREATED_AGENT_ID = "22222222-2222-4222-8222-222222222222";
 
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
+  assertCheckoutOwner: vi.fn(async () => ({ adoptedFromRunId: null })),
 }));
 
 const mockInteractionService = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ const mockInteractionService = vi.hoisted(() => ({
   expireRequestConfirmationsSupersededByHistoricalComments: vi.fn(),
   answerQuestions: vi.fn(),
   cancelQuestions: vi.fn(),
+  supersedeDuplicateQuestions: vi.fn(),
 }));
 
 const mockHeartbeatService = vi.hoisted(() => ({
@@ -26,6 +28,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
+const mockAccessDecide = vi.hoisted(() => vi.fn());
 const mockDbSelectWhere = vi.hoisted(() => vi.fn(() => ({
   then: (onFulfilled: (rows: unknown[]) => unknown, onRejected?: (reason: unknown) => unknown) =>
     Promise.resolve([{ companyId: "company-1", agentId: CREATED_AGENT_ID, contextSnapshot: null }]).then(
@@ -55,12 +58,7 @@ function registerModuleMocks() {
     }),
     accessService: () => ({
       canUser: vi.fn(async () => true),
-      decide: vi.fn(async (input: { action?: string }) => ({
-        allowed: true,
-        action: input.action,
-        reason: "allow_explicit_grant",
-        explanation: "Allowed by test grant.",
-      })),
+      decide: mockAccessDecide,
       hasPermission: vi.fn(async () => true),
     }),
     agentService: () => ({
@@ -179,6 +177,12 @@ describe.sequential("issue thread interaction routes", () => {
     vi.doUnmock("../services/index.js");
     registerModuleMocks();
     vi.clearAllMocks();
+    mockAccessDecide.mockImplementation(async (input: { action?: string }) => ({
+      allowed: true,
+      action: input.action,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by test grant.",
+    }));
     mockIssueService.getById.mockResolvedValue(createIssue());
     mockInteractionService.listForIssue.mockResolvedValue([]);
     mockInteractionService.expireRequestConfirmationsSupersededByHistoricalComments.mockResolvedValue([]);
@@ -306,6 +310,41 @@ describe.sequential("issue thread interaction routes", () => {
         cancelled: true,
         cancellationReason: null,
         summaryMarkdown: null,
+      },
+      createdAt: "2026-04-20T12:00:00.000Z",
+      updatedAt: "2026-04-20T12:05:00.000Z",
+      resolvedAt: "2026-04-20T12:05:00.000Z",
+    });
+    mockInteractionService.supersedeDuplicateQuestions.mockResolvedValue({
+      id: "interaction-2",
+      companyId: "company-1",
+      issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      kind: "ask_user_questions",
+      status: "cancelled",
+      continuationPolicy: "wake_assignee",
+      idempotencyKey: null,
+      sourceCommentId: "comment-2",
+      sourceRunId: "run-2",
+      payload: {
+        version: 1,
+        questions: [{
+          id: "scope",
+          prompt: "Scope?",
+          selectionMode: "single",
+          options: [{ id: "phase-1", label: "Phase 1" }],
+        }],
+      },
+      result: {
+        version: 1,
+        answers: [],
+        cancelled: true,
+        cancellationReason: "Use the canonical lane instead.",
+        summaryMarkdown: null,
+        duplicateSupersession: {
+          reason: "Use the canonical lane instead.",
+          canonicalIssueId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          canonicalInteractionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        },
       },
       createdAt: "2026-04-20T12:00:00.000Z",
       updatedAt: "2026-04-20T12:05:00.000Z",
@@ -500,6 +539,112 @@ describe.sequential("issue thread interaction routes", () => {
         action: "issue.thread_interaction_cancelled",
       }),
     );
+  });
+
+  it("lets assignee agents supersede duplicate question interactions and emits a continuation wake", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId: ASSIGNEE_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-assignee",
+      source: "agent_key",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-2/supersede-duplicate")
+      .send({
+        reason: "Use the canonical lane instead.",
+        canonicalInteractionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockInteractionService.supersedeDuplicateQuestions).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+      "interaction-2",
+      {
+        reason: "Use the canonical lane instead.",
+        canonicalInteractionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      },
+      expect.objectContaining({ agentId: ASSIGNEE_AGENT_ID }),
+    );
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      ASSIGNEE_AGENT_ID,
+      expect.objectContaining({
+        reason: "issue_commented",
+        payload: expect.objectContaining({
+          interactionId: "interaction-2",
+          interactionKind: "ask_user_questions",
+          interactionStatus: "cancelled",
+          sourceCommentId: "comment-2",
+          sourceRunId: "run-2",
+        }),
+        contextSnapshot: expect.objectContaining({
+          source: "issue.interaction.supersede_duplicate",
+        }),
+      }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "issue.thread_interaction_cancelled",
+        details: expect.objectContaining({
+          source: "issue.interaction.supersede_duplicate",
+          duplicateSupersessionReason: "Use the canonical lane instead.",
+          canonicalReplacementIssueId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          canonicalReplacementInteractionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        }),
+      }),
+    );
+  });
+
+  it("rejects cross-company agent duplicate supersession requests before calling the service", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId: ASSIGNEE_AGENT_ID,
+      companyId: "company-2",
+      runId: "run-cross-company",
+      source: "agent_key",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-2/supersede-duplicate")
+      .send({
+        reason: "Use the canonical lane instead.",
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("Agent key cannot access another company");
+    expect(mockInteractionService.supersedeDuplicateQuestions).not.toHaveBeenCalled();
+  });
+
+  it("rejects out-of-scope agent duplicate supersession requests", async () => {
+    mockAccessDecide.mockImplementation(async (input: { action?: string }) => ({
+      allowed: input.action === "tasks:manage_active_checkouts" ? false : true,
+      action: input.action,
+      reason: input.action === "tasks:manage_active_checkouts" ? "deny_default" : "allow_explicit_grant",
+      explanation:
+        input.action === "tasks:manage_active_checkouts"
+          ? "Denied by default in test harness."
+          : "Allowed by test grant.",
+    }));
+
+    const app = await createApp({
+      type: "agent",
+      agentId: "33333333-3333-4333-8333-333333333333",
+      companyId: "company-1",
+      runId: "run-out-of-scope",
+      source: "agent_key",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-2/supersede-duplicate")
+      .send({
+        reason: "Use the canonical lane instead.",
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("Issue is checked out by another agent");
+    expect(mockInteractionService.supersedeDuplicateQuestions).not.toHaveBeenCalled();
   });
 
   it("accepts request confirmations and wakes the current assignee when configured for accept-only wakeups", async () => {

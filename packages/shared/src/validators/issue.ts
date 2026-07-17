@@ -705,6 +705,11 @@ export const askUserQuestionsResultSchema = z.object({
   expirationReason: z.literal("superseded_by_comment").optional(),
   commentId: z.string().uuid().nullable().optional(),
   summaryMarkdown: z.string().max(20000).nullable().optional(),
+  duplicateSupersession: z.object({
+    reason: z.string().trim().min(1).max(4000),
+    canonicalIssueId: z.string().uuid().nullable().optional(),
+    canonicalInteractionId: z.string().uuid().nullable().optional(),
+  }).nullable().optional(),
 });
 
 const requestConfirmationHrefSchema = z.string().trim().min(1).max(2000).refine((value) => {
@@ -968,6 +973,13 @@ export const cancelIssueThreadInteractionSchema = z.object({
   reason: z.string().trim().max(4000).optional(),
 });
 export type CancelIssueThreadInteraction = z.infer<typeof cancelIssueThreadInteractionSchema>;
+
+export const supersedeDuplicateIssueThreadInteractionSchema = z.object({
+  reason: z.string().trim().min(1).max(4000),
+  canonicalIssueId: z.string().uuid().nullable().optional(),
+  canonicalInteractionId: z.string().uuid().nullable().optional(),
+});
+export type SupersedeDuplicateIssueThreadInteraction = z.infer<typeof supersedeDuplicateIssueThreadInteractionSchema>;
 
 export const respondIssueThreadInteractionSchema = z.object({
   answers: z.array(askUserQuestionsAnswerSchema).max(20),

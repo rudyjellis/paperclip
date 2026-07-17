@@ -575,6 +575,222 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     })).rejects.toThrow("Interaction has already been resolved");
   });
 
+  it("supersedes duplicate pending agent-authored ask_user_questions with canonical replacement metadata", async () => {
+    const { companyId, goalId, issueId } = await seedConfirmationIssue("Duplicate prompt cleanup");
+    const authorAgentId = randomUUID();
+    const resolverAgentId = randomUUID();
+    const canonicalIssueId = randomUUID();
+
+    await db.insert(agents).values([
+      {
+        id: authorAgentId,
+        companyId,
+        name: "PromptAuthor",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: resolverAgentId,
+        companyId,
+        name: "PromptResolver",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+    await db.insert(issues).values({
+      id: canonicalIssueId,
+      companyId,
+      goalId,
+      title: "Canonical lane",
+      status: "in_review",
+      priority: "medium",
+    });
+
+    const duplicate = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "ask_user_questions",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        questions: [{
+          id: "scope",
+          prompt: "Which lane should I keep?",
+          selectionMode: "single",
+          options: [{ id: "canonical", label: "Canonical lane" }],
+        }],
+      },
+    }, {
+      agentId: authorAgentId,
+    });
+
+    const canonical = await interactionsSvc.create({
+      id: canonicalIssueId,
+      companyId,
+    }, {
+      kind: "ask_user_questions",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        questions: [{
+          id: "scope",
+          prompt: "Use this lane?",
+          selectionMode: "single",
+          options: [{ id: "yes", label: "Yes" }],
+        }],
+      },
+    }, {
+      agentId: authorAgentId,
+    });
+
+    const cancelled = await interactionsSvc.supersedeDuplicateQuestions({
+      id: issueId,
+      companyId,
+    }, duplicate.id, {
+      reason: "Use the canonical coordination lane instead.",
+      canonicalInteractionId: canonical.id,
+    }, {
+      agentId: resolverAgentId,
+    });
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.result).toEqual({
+      version: 1,
+      answers: [],
+      cancelled: true,
+      cancellationReason: "Use the canonical coordination lane instead.",
+      summaryMarkdown: null,
+      duplicateSupersession: {
+        reason: "Use the canonical coordination lane instead.",
+        canonicalIssueId,
+        canonicalInteractionId: canonical.id,
+      },
+    });
+    expect(cancelled.resolvedByAgentId).toBe(resolverAgentId);
+  });
+
+  it("rejects duplicate supersession for board-authored ask_user_questions", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Board-authored duplicate");
+    const resolverAgentId = randomUUID();
+
+    await db.insert(agents).values({
+      id: resolverAgentId,
+      companyId,
+      name: "PromptResolver",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const interaction = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "ask_user_questions",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        questions: [{
+          id: "scope",
+          prompt: "Should this stay open?",
+          selectionMode: "single",
+          options: [{ id: "yes", label: "Yes" }],
+        }],
+      },
+    }, {
+      userId: "local-board",
+    });
+
+    await expect(interactionsSvc.supersedeDuplicateQuestions({
+      id: issueId,
+      companyId,
+    }, interaction.id, {
+      reason: "Use the canonical lane instead.",
+    }, {
+      agentId: resolverAgentId,
+    })).rejects.toThrow("Only agent-authored ask_user_questions interactions can be superseded as duplicates");
+  });
+
+  it("rejects duplicate supersession for already-resolved ask_user_questions", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Resolved duplicate");
+    const authorAgentId = randomUUID();
+    const resolverAgentId = randomUUID();
+
+    await db.insert(agents).values([
+      {
+        id: authorAgentId,
+        companyId,
+        name: "PromptAuthor",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: resolverAgentId,
+        companyId,
+        name: "PromptResolver",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+
+    const interaction = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "ask_user_questions",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        questions: [{
+          id: "scope",
+          prompt: "Should this stay open?",
+          selectionMode: "single",
+          options: [{ id: "yes", label: "Yes" }],
+        }],
+      },
+    }, {
+      agentId: authorAgentId,
+    });
+
+    await interactionsSvc.cancelQuestions({
+      id: issueId,
+      companyId,
+    }, interaction.id, {
+      reason: "Already handled",
+    }, {
+      userId: "local-board",
+    });
+
+    await expect(interactionsSvc.supersedeDuplicateQuestions({
+      id: issueId,
+      companyId,
+    }, interaction.id, {
+      reason: "Use the canonical lane instead.",
+    }, {
+      agentId: resolverAgentId,
+    })).rejects.toThrow("Interaction has already been resolved");
+  });
+
   it("expires ask_user_questions interactions by default when a user comments after creation", async () => {
     const { companyId, issueId } = await seedConfirmationIssue("Question supersede");
     const commentId = randomUUID();

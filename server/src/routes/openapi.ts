@@ -101,6 +101,7 @@ import {
   acceptIssueThreadInteractionSchema,
   rejectIssueThreadInteractionSchema,
   respondIssueThreadInteractionSchema,
+  supersedeDuplicateIssueThreadInteractionSchema,
   // Auth / profile
   updateCurrentUserProfileSchema,
   // Company portability (legacy routes)
@@ -3290,6 +3291,18 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
+  path: "/api/issues/{id}/interactions/{interactionId}/supersede-duplicate",
+  tags: ["issues"],
+  summary: "Supersede a duplicate agent-authored question interaction",
+  request: {
+    params: z.object({ id: z.string(), interactionId: z.string() }),
+    body: jsonBody(supersedeDuplicateIssueThreadInteractionSchema),
+  },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
+});
+
+registry.registerPath({
+  method: "post",
   path: "/api/issues/{id}/children",
   tags: ["issues"],
   summary: "Create child issues",
@@ -4991,6 +5004,14 @@ registerCurrentRoute({
   tags: ["issues"],
   summary: "Cancel an issue question interaction",
   body: cancelIssueThreadInteractionSchema,
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/issues/{id}/interactions/{interactionId}/supersede-duplicate",
+  tags: ["issues"],
+  summary: "Supersede a duplicate agent-authored question interaction",
+  body: supersedeDuplicateIssueThreadInteractionSchema,
 });
 
 for (const route of [
