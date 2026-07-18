@@ -1672,6 +1672,173 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     })).resolves.toEqual([]);
   });
 
+  it("supersedes eligible assignee-authored review confirmations during manager closeout", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Managed review closeout");
+    const assigneeAgentId = randomUUID();
+    const reviewerAgentId = randomUUID();
+    const commentId = randomUUID();
+
+    await db.insert(agents).values([
+      {
+        id: assigneeAgentId,
+        companyId,
+        name: "Assignee",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: reviewerAgentId,
+        companyId,
+        name: "Reviewer",
+        role: "cto",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+    await db
+      .update(issues)
+      .set({
+        status: "in_review",
+        assigneeAgentId,
+      })
+      .where(eq(issues.id, issueId));
+
+    const created = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "request_confirmation",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        prompt: "Accept this landed change?",
+      },
+    }, {
+      agentId: assigneeAgentId,
+    });
+
+    const expired = await interactionsSvc.supersedeManagedReviewCloseoutInteractions(
+      {
+        id: issueId,
+        companyId,
+        assigneeAgentId,
+      },
+      {
+        interactionIds: [created.id],
+        commentId,
+        reason: "Superseded by authorized manager review closeout.",
+      },
+      {
+        agentId: reviewerAgentId,
+      },
+    );
+
+    expect(expired).toHaveLength(1);
+    expect(expired[0]).toMatchObject({
+      id: created.id,
+      status: "expired",
+      result: {
+        version: 1,
+        outcome: "superseded_by_comment",
+        commentId,
+        reason: "Superseded by authorized manager review closeout.",
+      },
+      resolvedByAgentId: reviewerAgentId,
+      resolvedByUserId: null,
+    });
+  });
+
+  it("rejects manager closeout supersession for target-bound confirmations", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Managed review closeout target");
+    const assigneeAgentId = randomUUID();
+    const reviewerAgentId = randomUUID();
+
+    await db.insert(agents).values([
+      {
+        id: assigneeAgentId,
+        companyId,
+        name: "Assignee",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: reviewerAgentId,
+        companyId,
+        name: "Reviewer",
+        role: "cto",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+    await db
+      .update(issues)
+      .set({
+        status: "in_review",
+        assigneeAgentId,
+      })
+      .where(eq(issues.id, issueId));
+
+    const created = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "request_confirmation",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        prompt: "Accept the latest plan?",
+        target: {
+          type: "custom",
+          key: "plan-v1",
+          revisionId: "plan-v1",
+          revisionNumber: 1,
+          href: "#document-plan",
+        },
+      },
+    }, {
+      agentId: assigneeAgentId,
+    });
+
+    await expect(interactionsSvc.supersedeManagedReviewCloseoutInteractions(
+      {
+        id: issueId,
+        companyId,
+        assigneeAgentId,
+      },
+      {
+        interactionIds: [created.id],
+        commentId: randomUUID(),
+        reason: "Superseded by authorized manager review closeout.",
+      },
+      {
+        agentId: reviewerAgentId,
+      },
+    )).rejects.toThrow(
+      "Only eligible assignee-authored review confirmations can be superseded by manager closeout",
+    );
+
+    const row = await db
+      .select()
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.id, created.id))
+      .then((rows) => rows[0] ?? null);
+    expect(row?.status).toBe("pending");
+  });
+
   it("expires request confirmations when the watched issue document revision changes", async () => {
     const companyId = randomUUID();
     const goalId = randomUUID();

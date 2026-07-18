@@ -104,6 +104,19 @@ function isUserCommentSupersedableKind(kind: string): kind is UserCommentSuperse
   return (USER_COMMENT_SUPERSEDABLE_INTERACTION_KINDS as readonly string[]).includes(kind);
 }
 
+export function isManagedReviewCloseoutSupersedableInteraction(args: {
+  interaction: IssueThreadInteraction;
+  assigneeAgentId: string | null;
+}) {
+  if (!args.assigneeAgentId) return false;
+  if (args.interaction.status !== "pending") return false;
+  if (args.interaction.kind !== "request_confirmation") return false;
+  if (args.interaction.createdByUserId) return false;
+  if (args.interaction.createdByAgentId !== args.assigneeAgentId) return false;
+  if (args.interaction.continuationPolicy === "none") return false;
+  return !args.interaction.payload.target;
+}
+
 function isIssueThreadInteractionIdempotencyConflict(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const err = error as { code?: string; constraint?: string; constraint_name?: string };
@@ -249,6 +262,18 @@ function buildSupersededByCommentResult(row: IssueThreadInteractionRow, commentI
     version: 1,
     outcome: "superseded_by_comment",
     commentId,
+  } as const;
+}
+
+function buildManagedReviewCloseoutSupersededResult(args: {
+  commentId: string;
+  reason: string;
+}) {
+  return {
+    version: 1,
+    outcome: "superseded_by_comment",
+    commentId: args.commentId,
+    reason: args.reason,
   } as const;
 }
 
@@ -1546,6 +1571,82 @@ export function issueThreadInteractionService(db: Db) {
         }
       }
 
+      if (expired.length > 0) {
+        await touchIssue(db, issue.id);
+        await emitResolvedInteractionsTelemetry(db, expired);
+      }
+      return expired;
+    },
+
+    supersedeManagedReviewCloseoutInteractions: async (
+      issue: { id: string; companyId: string; assigneeAgentId: string | null },
+      input: {
+        interactionIds: string[];
+        commentId: string;
+        reason: string;
+      },
+      actor: InteractionActor,
+    ) => {
+      const interactionIds = [...new Set(input.interactionIds)];
+      if (interactionIds.length === 0) return [];
+
+      const rows = await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(and(
+          eq(issueThreadInteractions.companyId, issue.companyId),
+          eq(issueThreadInteractions.issueId, issue.id),
+          inArray(issueThreadInteractions.id, interactionIds),
+        ));
+
+      if (rows.length !== interactionIds.length) {
+        throw unprocessable(
+          "Only same-issue pending review confirmations can be superseded by manager closeout",
+        );
+      }
+
+      const invalidRows = rows.filter((row) => {
+        const interaction = hydrateInteraction(row);
+        return (
+          row.status === "pending"
+          && !isManagedReviewCloseoutSupersedableInteraction({
+            interaction,
+            assigneeAgentId: issue.assigneeAgentId,
+          })
+        );
+      });
+      if (invalidRows.length > 0) {
+        throw unprocessable(
+          "Only eligible assignee-authored review confirmations can be superseded by manager closeout",
+        );
+      }
+
+      const pendingEligibleIds = rows
+        .filter((row) => row.status === "pending")
+        .map((row) => row.id);
+      if (pendingEligibleIds.length === 0) return [];
+
+      const now = new Date();
+      const updatedRows = await db
+        .update(issueThreadInteractions)
+        .set({
+          status: "expired",
+          result: buildManagedReviewCloseoutSupersededResult({
+            commentId: input.commentId,
+            reason: input.reason.trim(),
+          }),
+          resolvedByAgentId: actor.agentId ?? null,
+          resolvedByUserId: actor.userId ?? null,
+          resolvedAt: now,
+          updatedAt: now,
+        })
+        .where(and(
+          inArray(issueThreadInteractions.id, pendingEligibleIds),
+          eq(issueThreadInteractions.status, "pending"),
+        ))
+        .returning();
+
+      const expired = updatedRows.map((row) => hydrateInteraction(row));
       if (expired.length > 0) {
         await touchIssue(db, issue.id);
         await emitResolvedInteractionsTelemetry(db, expired);
