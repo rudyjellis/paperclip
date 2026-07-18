@@ -222,6 +222,108 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
     });
   });
 
+  it("resolves issue identifiers for parentId list filters", async () => {
+    const companyId = randomUUID();
+    const parentIssueId = randomUUID();
+    const childIssueId = randomUUID();
+    const siblingIssueId = randomUUID();
+    const issuePrefix = uniqueIssuePrefix();
+    const parentIdentifier = `${issuePrefix}-7`;
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await seedCloudTenantMember(companyId);
+    await db.insert(issues).values([
+      {
+        id: parentIssueId,
+        companyId,
+        issueNumber: 7,
+        identifier: parentIdentifier,
+        title: "Identifier parent",
+        status: "todo",
+        priority: "medium",
+      },
+      {
+        id: childIssueId,
+        companyId,
+        title: "Child issue",
+        status: "todo",
+        priority: "medium",
+        parentId: parentIssueId,
+      },
+      {
+        id: siblingIssueId,
+        companyId,
+        title: "Sibling issue",
+        status: "todo",
+        priority: "medium",
+      },
+    ]);
+
+    const app = createApp(companyId);
+    const res = await request(app)
+      .get(`/api/companies/${companyId}/issues`)
+      .query({ status: "todo", parentId: parentIdentifier.toLowerCase(), limit: "20" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.map((issue: { id: string }) => issue.id)).toEqual([childIssueId]);
+  });
+
+  it("resolves issue identifiers for blocked count parentId filters", async () => {
+    const companyId = randomUUID();
+    const parentIssueId = randomUUID();
+    const blockedChildIssueId = randomUUID();
+    const otherBlockedIssueId = randomUUID();
+    const issuePrefix = uniqueIssuePrefix();
+    const parentIdentifier = `${issuePrefix}-11`;
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await seedCloudTenantMember(companyId);
+    await db.insert(issues).values([
+      {
+        id: parentIssueId,
+        companyId,
+        issueNumber: 11,
+        identifier: parentIdentifier,
+        title: "Blocked parent",
+        status: "blocked",
+        priority: "medium",
+      },
+      {
+        id: blockedChildIssueId,
+        companyId,
+        title: "Blocked child",
+        status: "blocked",
+        priority: "medium",
+        parentId: parentIssueId,
+      },
+      {
+        id: otherBlockedIssueId,
+        companyId,
+        title: "Other blocked issue",
+        status: "blocked",
+        priority: "medium",
+      },
+    ]);
+
+    const app = createApp(companyId);
+    const res = await request(app)
+      .get(`/api/companies/${companyId}/issues/count`)
+      .query({ attention: "blocked", status: "blocked", parentId: parentIdentifier });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toEqual({ count: 1 });
+  });
+
   it("returns opt-in live descendant counts for offscreen live descendants only", async () => {
     const companyId = randomUUID();
     const otherCompanyId = randomUUID();

@@ -3075,6 +3075,37 @@ export function issueRoutes(
     return rawId;
   }
 
+  async function resolveCompanyIssueReferenceFilter(
+    companyId: string,
+    rawValue: string | undefined,
+    fieldName: "descendantOf" | "parentId",
+  ): Promise<{ notFound: boolean; value: string | undefined }> {
+    if (rawValue === undefined) {
+      return { notFound: false, value: undefined };
+    }
+
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      return { notFound: false, value: undefined };
+    }
+
+    if (isUuidLike(trimmed)) {
+      return { notFound: false, value: trimmed };
+    }
+
+    const identifier = normalizeIssueReferenceIdentifier(trimmed);
+    if (!identifier) {
+      throw unprocessable(`${fieldName} must be a UUID or issue identifier`);
+    }
+
+    const issue = await svc.getByIdentifier(identifier);
+    if (!issue || issue.companyId !== companyId) {
+      return { notFound: true, value: undefined };
+    }
+
+    return { notFound: false, value: issue.id };
+  }
+
   async function resolveIssueProjectAndGoal(issue: {
     companyId: string;
     projectId: string | null;
@@ -3262,6 +3293,22 @@ export function issueRoutes(
         return;
       }
     }
+    const [parentFilter, descendantFilter] = await Promise.all([
+      resolveCompanyIssueReferenceFilter(
+        companyId,
+        req.query.parentId as string | undefined,
+        "parentId",
+      ),
+      resolveCompanyIssueReferenceFilter(
+        companyId,
+        req.query.descendantOf as string | undefined,
+        "descendantOf",
+      ),
+    ]);
+    if (parentFilter.notFound || descendantFilter.notFound) {
+      res.json([]);
+      return;
+    }
     const offset = parsedOffset ?? 0;
 
     const rawResult = await svc.list(companyId, {
@@ -3276,8 +3323,8 @@ export function issueRoutes(
       projectId: req.query.projectId as string | undefined,
       workspaceId: req.query.workspaceId as string | undefined,
       executionWorkspaceId: req.query.executionWorkspaceId as string | undefined,
-      parentId: req.query.parentId as string | undefined,
-      descendantOf: req.query.descendantOf as string | undefined,
+      parentId: parentFilter.value,
+      descendantOf: descendantFilter.value,
       labelId: req.query.labelId as string | undefined,
       originKind: req.query.originKind as string | undefined,
       originKindPrefix: req.query.originKindPrefix as string | undefined,
@@ -3348,6 +3395,22 @@ export function issueRoutes(
       res.status(400).json({ error: "hasPlanDocument must be true or false when provided" });
       return;
     }
+    const [parentFilter, descendantFilter] = await Promise.all([
+      resolveCompanyIssueReferenceFilter(
+        companyId,
+        req.query.parentId as string | undefined,
+        "parentId",
+      ),
+      resolveCompanyIssueReferenceFilter(
+        companyId,
+        req.query.descendantOf as string | undefined,
+        "descendantOf",
+      ),
+    ]);
+    if (parentFilter.notFound || descendantFilter.notFound) {
+      res.json({ count: 0 });
+      return;
+    }
 
     const blockedCountFilters = {
       attention: "blocked",
@@ -3358,8 +3421,8 @@ export function issueRoutes(
       projectId: req.query.projectId as string | undefined,
       workspaceId: req.query.workspaceId as string | undefined,
       executionWorkspaceId: req.query.executionWorkspaceId as string | undefined,
-      parentId: req.query.parentId as string | undefined,
-      descendantOf: req.query.descendantOf as string | undefined,
+      parentId: parentFilter.value,
+      descendantOf: descendantFilter.value,
       labelId: req.query.labelId as string | undefined,
       originKind: req.query.originKind as string | undefined,
       originKindPrefix: req.query.originKindPrefix as string | undefined,
