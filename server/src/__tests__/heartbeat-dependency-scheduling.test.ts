@@ -925,6 +925,7 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
       title: "Blocked interaction follow-up",
       status: "blocked",
       priority: "medium",
+      responsibleUserId: "responsible-user",
       assigneeAgentId: agentId,
     });
     const comment = await db

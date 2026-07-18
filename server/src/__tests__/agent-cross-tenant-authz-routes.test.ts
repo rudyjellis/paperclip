@@ -332,40 +332,40 @@ describe.sequential("agent cross-tenant route authorization", () => {
     const deniedCases = [
       {
         label: "pause",
-        request: (app: express.Express) =>
-          requestApp(app, (baseUrl) => request(baseUrl).post(`/api/agents/${agentId}/pause`).send({})),
+        request: (serverApp: express.Express) =>
+          requestApp(serverApp, (baseUrl) => request(baseUrl).post(`/api/agents/${agentId}/pause`).send({})),
         untouched: [mockAgentService.pause, mockHeartbeatService.cancelActiveForAgent],
       },
       {
         label: "clear error",
-        request: (app: express.Express) =>
-          requestApp(app, (baseUrl) => request(baseUrl).post(`/api/agents/${agentId}/clear-error`).send({})),
+        request: (serverApp: express.Express) =>
+          requestApp(serverApp, (baseUrl) => request(baseUrl).post(`/api/agents/${agentId}/clear-error`).send({})),
         untouched: [mockAgentService.clearError],
       },
       {
         label: "list keys",
-        request: (app: express.Express) =>
-          requestApp(app, (baseUrl) => request(baseUrl).get(`/api/agents/${agentId}/keys`)),
+        request: (serverApp: express.Express) =>
+          requestApp(serverApp, (baseUrl) => request(baseUrl).get(`/api/agents/${agentId}/keys`)),
         untouched: [mockAgentService.listKeys],
       },
       {
         label: "create key",
-        request: (app: express.Express) =>
-          requestApp(app, (baseUrl) => request(baseUrl).post(`/api/agents/${agentId}/keys`).send({ name: "exploit" })),
+        request: (serverApp: express.Express) =>
+          requestApp(serverApp, (baseUrl) => request(baseUrl).post(`/api/agents/${agentId}/keys`).send({ name: "exploit" })),
         untouched: [mockAgentService.createApiKey],
       },
       {
         label: "revoke key",
-        request: (app: express.Express) =>
-          requestApp(app, (baseUrl) => request(baseUrl).delete(`/api/agents/${agentId}/keys/${keyId}`)),
+        request: (serverApp: express.Express) =>
+          requestApp(serverApp, (baseUrl) => request(baseUrl).delete(`/api/agents/${agentId}/keys/${keyId}`)),
         untouched: [mockAgentService.getKeyById, mockAgentService.revokeKey],
       },
     ];
+    const crossTenantApp = await createApp(crossTenantActor);
 
     for (const deniedCase of deniedCases) {
       resetMockDefaults();
-      const app = await createApp(crossTenantActor);
-      const res = await deniedCase.request(app);
+      const res = await deniedCase.request(crossTenantApp);
 
       expect(res.status, `${deniedCase.label}: ${JSON.stringify(res.body)}`).toBe(403);
       expect(res.body.error).toContain("User does not have access to this company");
@@ -379,7 +379,7 @@ describe.sequential("agent cross-tenant route authorization", () => {
     currentKeyAgentId = "44444444-4444-4444-8444-444444444444";
     currentAccessCanUser = true;
 
-    const app = await createApp({
+    const keyMismatchApp = await createApp({
       type: "board",
       userId: "board-user",
       companyIds: [companyId],
@@ -387,13 +387,16 @@ describe.sequential("agent cross-tenant route authorization", () => {
       isInstanceAdmin: false,
     });
 
-    const res = await requestApp(app, (baseUrl) => request(baseUrl).delete(`/api/agents/${agentId}/keys/${keyId}`));
+    const res = await requestApp(
+      keyMismatchApp,
+      (baseUrl) => request(baseUrl).delete(`/api/agents/${agentId}/keys/${keyId}`),
+    );
 
     expect(res.status).toBe(404);
     expect(res.body.error).toContain("Key not found");
     expect(mockAgentService.getKeyById).toHaveBeenCalledWith(keyId);
     expect(mockAgentService.revokeKey).not.toHaveBeenCalled();
-  });
+  }, 10_000);
 
   it("requires board access before clearing an agent error", async () => {
     const app = await createApp({

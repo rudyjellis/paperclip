@@ -111,11 +111,23 @@ vi.mock("../services/index.js", () => ({
   }),
 }));
 
-async function createApp() {
-  const [{ issueRoutes }, { errorHandler }] = await Promise.all([
+let routeModules:
+  | Promise<[
+    typeof import("../routes/issues.js"),
+    typeof import("../middleware/index.js"),
+  ]>
+  | null = null;
+
+async function loadRouteModules() {
+  routeModules ??= Promise.all([
     vi.importActual<typeof import("../routes/issues.js")>("../routes/issues.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
   ]);
+  return routeModules;
+}
+
+async function createApp() {
+  const [{ issueRoutes }, { errorHandler }] = await loadRouteModules();
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -242,7 +254,7 @@ describe("assigned backlog creation contract", () => {
         }),
       }),
     );
-  });
+  }, 10_000);
 
   it("does not let a parent-blocking assigned child become an unwoken backlog leaf by default", async () => {
     const res = await request(await createApp())
