@@ -105,6 +105,7 @@ import {
   resolveTaskWatchdogMutationScope,
   taskWatchdogScopeAllowsIssueMutation,
 } from "../services/task-watchdog-scope.js";
+import { isManagedReviewCloseoutSupersedableInteraction } from "../services/issue-thread-interactions.js";
 import type { TaskWatchdogServiceDeps, taskWatchdogService } from "../services/task-watchdogs.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized, unprocessable } from "../errors.js";
@@ -2219,7 +2220,11 @@ export function issueRoutes(
     return comment.length > 0;
   }
 
-  async function canUseManagedInReviewCloseoutPath(
+  type ManagedInReviewCloseoutPath = {
+    supersedablePendingInteractionIds: string[];
+  };
+
+  async function resolveManagedInReviewCloseoutPath(
     req: Request,
     issue: {
       id: string;
@@ -2230,23 +2235,31 @@ export function issueRoutes(
       executionState?: unknown;
     },
     body: Record<string, unknown>,
-  ) {
-    if (req.actor.type !== "agent") return false;
+  ): Promise<ManagedInReviewCloseoutPath | null> {
+    if (req.actor.type !== "agent") return null;
     const actorAgentId = req.actor.agentId;
-    if (!actorAgentId || issue.status !== "in_review") return false;
-    if (!issue.assigneeAgentId || issue.assigneeAgentId === actorAgentId || issue.assigneeUserId) return false;
-    if (!isManagedInReviewCloseoutPatch(body)) return false;
+    if (!actorAgentId || issue.status !== "in_review") return null;
+    if (!issue.assigneeAgentId || issue.assigneeAgentId === actorAgentId || issue.assigneeUserId) return null;
+    if (!isManagedInReviewCloseoutPatch(body)) return null;
 
     const executionState = parseIssueExecutionState(issue.executionState);
-    if (executionState?.currentParticipant) return false;
+    if (executionState?.currentParticipant) return null;
 
     const interactions = await issueThreadInteractionsSvc.listForIssue(issue.id);
-    if (interactions.some((interaction) => interaction.status === "pending")) return false;
+    const pendingInteractions = interactions.filter((interaction) => interaction.status === "pending");
+    if (pendingInteractions.some((interaction) => !isManagedReviewCloseoutSupersedableInteraction({
+      interaction,
+      assigneeAgentId: issue.assigneeAgentId,
+    }))) {
+      return null;
+    }
 
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(issue.id);
-    if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return false;
+    if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return null;
 
-    return true;
+    return {
+      supersedablePendingInteractionIds: pendingInteractions.map((interaction) => interaction.id),
+    };
   }
 
   async function assertAgentIssueMutationAllowed(
@@ -6058,7 +6071,7 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
-    const managedInReviewCloseoutPath = await canUseManagedInReviewCloseoutPath(
+    const managedInReviewCloseoutPath = await resolveManagedInReviewCloseoutPath(
       req,
       existing,
       req.body as Record<string, unknown>,
@@ -6837,6 +6850,35 @@ export function issueRoutes(
         interactions: expiredInteractions,
         actor,
         source: "issue.comment",
+      });
+
+      const managedCloseoutSupersededInteractions =
+        managedInReviewCloseoutPath && managedInReviewCloseoutPath.supersedablePendingInteractionIds.length > 0
+          ? await issueThreadInteractionsSvc.supersedeManagedReviewCloseoutInteractions(
+              {
+                id: issue.id,
+                companyId: issue.companyId,
+                assigneeAgentId: issue.assigneeAgentId,
+              },
+              {
+                interactionIds: managedInReviewCloseoutPath.supersedablePendingInteractionIds,
+                commentId: comment.id,
+                reason:
+                  "Superseded by authorized manager review closeout after technical review completed. "
+                  + "Use executionPolicy review stages instead of assignee-authored request_confirmation cards "
+                  + "for future cross-agent review gates.",
+              },
+              {
+                agentId: actor.agentId,
+                userId: actor.actorType === "user" ? actor.actorId : null,
+              },
+            )
+          : [];
+      await logExpiredRequestConfirmations({
+        issue,
+        interactions: managedCloseoutSupersededInteractions,
+        actor,
+        source: "issue.managed_in_review_closeout",
       });
 
     } else if (updateReferenceSummaryAfter) {
