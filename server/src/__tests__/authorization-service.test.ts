@@ -1260,6 +1260,68 @@ describeEmbeddedPostgres("authorization service", () => {
     expect(decision.explanation).toContain("another company");
   });
 
+  it("allows scoped manager review closeout issue mutation for a direct report in_review issue", async () => {
+    const company = await createCompany(db, "ManagerReviewCloseout");
+    const managerAgent = await createAgent(db, company.id, { role: "cto" });
+    const reportAgent = await createAgent(db, company.id, { role: "engineer", reportsTo: managerAgent.id });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: managerAgent.id, companyId: company.id, source: "agent_jwt" },
+      action: "issue:mutate",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        assigneeAgentId: reportAgent.id,
+        assigneeUserId: null,
+        status: "in_review",
+      },
+      scope: { managedInReviewCloseout: true },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_manager_chain",
+    });
+  });
+
+  it("keeps manager issue mutation denied without the scoped in_review closeout signal", async () => {
+    const company = await createCompany(db, "ManagerReviewCloseoutDenied");
+    const managerAgent = await createAgent(db, company.id, { role: "cto" });
+    const reportAgent = await createAgent(db, company.id, { role: "engineer", reportsTo: managerAgent.id });
+    const authz = authorizationService(db);
+
+    await expect(authz.decide({
+      actor: { type: "agent", agentId: managerAgent.id, companyId: company.id, source: "agent_jwt" },
+      action: "issue:mutate",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        assigneeAgentId: reportAgent.id,
+        assigneeUserId: null,
+        status: "in_review",
+      },
+    })).resolves.toMatchObject({
+      allowed: false,
+      reason: "deny_missing_grant",
+    });
+
+    await expect(authz.decide({
+      actor: { type: "agent", agentId: managerAgent.id, companyId: company.id, source: "agent_jwt" },
+      action: "issue:mutate",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        assigneeAgentId: reportAgent.id,
+        assigneeUserId: null,
+        status: "todo",
+      },
+      scope: { managedInReviewCloseout: true },
+    })).resolves.toMatchObject({
+      allowed: false,
+      reason: "deny_missing_grant",
+    });
+  });
+
   it("allows scoped assignment inside a granted project and denies other projects", async () => {
     const company = await createCompany(db, "ProjectScope");
     const project = await createProject(db, company.id, "Allowed");

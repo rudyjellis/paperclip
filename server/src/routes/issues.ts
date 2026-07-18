@@ -2095,6 +2095,7 @@ export function issueRoutes(
       status: string;
     },
     action: "issue:comment" | "issue:read" | "issue:mutate",
+    extraScope?: Record<string, unknown>,
   ) {
     return access.decide({
       actor: req.actor,
@@ -2115,6 +2116,7 @@ export function issueRoutes(
         parentIssueId: issue.parentId,
         assigneeAgentId: issue.assigneeAgentId,
         assigneeUserId: issue.assigneeUserId,
+        ...(extraScope ?? {}),
       },
     });
   }
@@ -2207,6 +2209,46 @@ export function issueRoutes(
     return decision.allowed;
   }
 
+  function isManagedInReviewCloseoutPatch(body: Record<string, unknown>) {
+    const populatedEntries = Object.entries(body).filter(([, value]) => value !== undefined);
+    if (populatedEntries.length === 0) return false;
+    if (!populatedEntries.every(([key]) => key === "status" || key === "comment")) return false;
+    const requestedStatus = body.status;
+    if (requestedStatus !== "done" && requestedStatus !== "in_progress") return false;
+    const comment = typeof body.comment === "string" ? body.comment.trim() : "";
+    return comment.length > 0;
+  }
+
+  async function canUseManagedInReviewCloseoutPath(
+    req: Request,
+    issue: {
+      id: string;
+      companyId: string;
+      status: string;
+      assigneeAgentId: string | null;
+      assigneeUserId: string | null;
+      executionState?: unknown;
+    },
+    body: Record<string, unknown>,
+  ) {
+    if (req.actor.type !== "agent") return false;
+    const actorAgentId = req.actor.agentId;
+    if (!actorAgentId || issue.status !== "in_review") return false;
+    if (!issue.assigneeAgentId || issue.assigneeAgentId === actorAgentId || issue.assigneeUserId) return false;
+    if (!isManagedInReviewCloseoutPatch(body)) return false;
+
+    const executionState = parseIssueExecutionState(issue.executionState);
+    if (executionState?.currentParticipant) return false;
+
+    const interactions = await issueThreadInteractionsSvc.listForIssue(issue.id);
+    if (interactions.some((interaction) => interaction.status === "pending")) return false;
+
+    const approvals = await issueApprovalsSvc.listApprovalsForIssue(issue.id);
+    if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return false;
+
+    return true;
+  }
+
   async function assertAgentIssueMutationAllowed(
     req: Request,
     res: Response,
@@ -2218,6 +2260,9 @@ export function issueRoutes(
       status: string;
       assigneeAgentId: string | null;
       assigneeUserId: string | null;
+    },
+    options?: {
+      managedInReviewCloseout?: boolean;
     },
   ) {
     if (req.actor.type !== "agent") return true;
@@ -2249,7 +2294,12 @@ export function issueRoutes(
       }
       return assertFreshTaskWatchdogSourceMutation(res, watchdogScope, issue);
     }
-    const boundaryDecision = await decideIssueAccess(req, issue, "issue:mutate");
+    const boundaryDecision = await decideIssueAccess(
+      req,
+      issue,
+      "issue:mutate",
+      options?.managedInReviewCloseout ? { managedInReviewCloseout: true } : undefined,
+    );
     if (!boundaryDecision.allowed) {
       res.status(403).json({ error: "Issue is outside this actor's authorization boundary" });
       return false;
@@ -6008,7 +6058,17 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
-    if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
+    const managedInReviewCloseoutPath = await canUseManagedInReviewCloseoutPath(
+      req,
+      existing,
+      req.body as Record<string, unknown>,
+    );
+    if (!(await assertAgentIssueMutationAllowed(
+      req,
+      res,
+      existing,
+      managedInReviewCloseoutPath ? { managedInReviewCloseout: true } : undefined,
+    ))) return;
     if (!(await assertCheapRecoveryIssueAssigneeProfileAllowed(req, res, existing, req.body))) return;
 
     const actor = getActorInfo(req);
@@ -6764,7 +6824,7 @@ export function issueRoutes(
         },
       });
 
-      const expiredInteractions = await issueThreadInteractionService(db).expireRequestConfirmationsSupersededByComment(
+      const expiredInteractions = await issueThreadInteractionsSvc.expireRequestConfirmationsSupersededByComment(
         issue,
         comment,
         {

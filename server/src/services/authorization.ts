@@ -172,6 +172,10 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function scopeRequestsManagedInReviewCloseout(scope: Record<string, unknown> | null | undefined) {
+  return Boolean(scope && readBoolean(scope.managedInReviewCloseout));
+}
+
 function objectIsEmpty(value: Record<string, unknown>) {
   return Object.keys(value).length === 0;
 }
@@ -1579,6 +1583,20 @@ export function authorizationService(db: Db) {
         })
       ) {
         return allowIssueMentionGrant(input.action);
+      }
+      if (
+        input.action === "issue:mutate" &&
+        resource?.status === "in_review" &&
+        resource.assigneeAgentId &&
+        !resource.assigneeUserId &&
+        scopeRequestsManagedInReviewCloseout(isPlainRecord(input.scope) ? input.scope : null) &&
+        await isManagerOf(companyId, actorAgentId, resource.assigneeAgentId)
+      ) {
+        return allow({
+          action: input.action,
+          reason: "allow_manager_chain",
+          explanation: "Allowed because the actor manages the in_review issue assignee for scoped review closeout.",
+        });
       }
     }
     if (
