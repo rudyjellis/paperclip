@@ -2217,6 +2217,11 @@ export function issueRoutes(
     return comment.length > 0;
   }
 
+  function isManagedInReviewCloseoutSupersedableInteraction(interaction: { kind: string; status: string }) {
+    return interaction.status === "pending"
+      && (interaction.kind === "request_confirmation" || interaction.kind === "request_checkbox_confirmation");
+  }
+
   async function hasManagedInReviewCloseoutOverride(
     req: Request,
     issue: {
@@ -2238,8 +2243,11 @@ export function issueRoutes(
     const executionState = parseIssueExecutionState(issue.executionState);
     if (executionState?.status === "pending") return false;
 
-    const interactions = await issueThreadInteractionService(db).listForIssue(issue.id);
-    if (interactions.some((interaction) => interaction.status === "pending")) return false;
+    const interactions = await issueThreadInteractionsSvc.listForIssue(issue.id);
+    const pendingInteractions = interactions.filter((interaction) => interaction.status === "pending");
+    if (pendingInteractions.some((interaction) => !isManagedInReviewCloseoutSupersedableInteraction(interaction))) {
+      return false;
+    }
 
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(issue.id);
     if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return false;
@@ -6809,19 +6817,28 @@ export function issueRoutes(
         },
       });
 
-      const expiredInteractions = await issueThreadInteractionService(db).expireRequestConfirmationsSupersededByComment(
-        issue,
-        comment,
-        {
-          agentId: actor.agentId,
-          userId: actor.actorType === "user" ? actor.actorId : null,
-        },
-      );
+      const expiredInteractions = managedInReviewCloseoutOverride
+        ? await issueThreadInteractionsSvc.expireRequestConfirmationsSupersededByCloseoutComment(
+            issue,
+            comment,
+            {
+              agentId: actor.agentId,
+              userId: actor.actorType === "user" ? actor.actorId : null,
+            },
+          )
+        : await issueThreadInteractionsSvc.expireRequestConfirmationsSupersededByComment(
+            issue,
+            comment,
+            {
+              agentId: actor.agentId,
+              userId: actor.actorType === "user" ? actor.actorId : null,
+            },
+          );
       await logExpiredRequestConfirmations({
         issue,
         interactions: expiredInteractions,
         actor,
-        source: "issue.comment",
+        source: managedInReviewCloseoutOverride ? "issue.managed_closeout_comment" : "issue.comment",
       });
 
     } else if (updateReferenceSummaryAfter) {

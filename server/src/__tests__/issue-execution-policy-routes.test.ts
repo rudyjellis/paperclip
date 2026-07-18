@@ -48,6 +48,7 @@ const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 const mockIssueThreadInteractionService = vi.hoisted(() => ({
   listForIssue: vi.fn(async () => []),
   expireRequestConfirmationsSupersededByComment: vi.fn(async () => []),
+  expireRequestConfirmationsSupersededByCloseoutComment: vi.fn(async () => []),
 }));
 const mockIssueApprovalService = vi.hoisted(() => ({
   listApprovalsForIssue: vi.fn(async () => []),
@@ -179,6 +180,7 @@ describe("issue execution policy routes", () => {
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
     mockIssueThreadInteractionService.listForIssue.mockResolvedValue([]);
     mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByComment.mockResolvedValue([]);
+    mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByCloseoutComment.mockResolvedValue([]);
     mockIssueApprovalService.listApprovalsForIssue.mockResolvedValue([]);
     mockDbSelect.mockImplementation(() => ({ from: mockDbSelectFrom }));
     mockDbSelectFrom.mockImplementation(() => ({ where: mockDbSelectWhere }));
@@ -511,6 +513,101 @@ describe("issue execution policy routes", () => {
       );
     },
   );
+
+  it("allows an authorized manager to close out a report-owned in_review issue with a pending request_confirmation", async () => {
+    const reviewerAgentId = "44444444-4444-4444-8444-444444444444";
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "in_review",
+      assigneeAgentId: "33333333-3333-4333-8333-333333333333",
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-1010",
+      title: "Stale confirmation closeout",
+      executionPolicy: null,
+      executionState: null,
+    };
+    const comment = {
+      id: "comment-manager-closeout",
+      issueId: issue.id,
+      companyId: issue.companyId,
+      body: "Approved after merge.",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      authorAgentId: reviewerAgentId,
+      authorUserId: null,
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+    mockIssueService.addComment.mockResolvedValue(comment);
+    mockIssueThreadInteractionService.listForIssue.mockResolvedValue([
+      { id: "interaction-1", kind: "request_confirmation", status: "pending" },
+    ]);
+    mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByCloseoutComment.mockResolvedValue([
+      {
+        id: "interaction-1",
+        kind: "request_confirmation",
+        status: "expired",
+        result: {
+          version: 1,
+          outcome: "superseded_by_comment",
+          commentId: comment.id,
+        },
+      },
+    ]);
+    mockAccessService.decide.mockImplementation(async (input: { action?: string; actor?: { type?: string } }) => {
+      const allowed = input.actor?.type === "board"
+        ? true
+        : input.action === "company_scope:read"
+          || input.action === "issue:read"
+          || input.action === "tasks:manage_active_checkouts";
+      return {
+        allowed,
+        action: input.action,
+        reason: allowed
+          ? (input.action === "tasks:manage_active_checkouts" ? "allow_manager_chain" : "allow_explicit_grant")
+          : "deny_missing_grant",
+        explanation: allowed ? "Allowed by test grant." : `Missing permission: ${input.action ?? "action"}`,
+      };
+    });
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: reviewerAgentId,
+      companyId: "company-1",
+      runId: "run-manager-closeout-stale-confirmation",
+    }))
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "done", comment: "Approved after merge." });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      expect.objectContaining({
+        status: "done",
+        actorAgentId: reviewerAgentId,
+        actorUserId: null,
+      }),
+    );
+    expect(mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByCloseoutComment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: issue.id,
+        companyId: issue.companyId,
+      }),
+      expect.objectContaining({
+        id: comment.id,
+      }),
+      expect.objectContaining({
+        agentId: reviewerAgentId,
+        userId: null,
+      }),
+    );
+  });
 
   it("does not let manager closeout bypass an active execution participant", async () => {
     const reviewerAgentId = "44444444-4444-4444-8444-444444444444";
