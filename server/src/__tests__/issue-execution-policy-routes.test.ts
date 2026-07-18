@@ -48,7 +48,6 @@ const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 const mockIssueThreadInteractionService = vi.hoisted(() => ({
   listForIssue: vi.fn(async () => []),
   expireRequestConfirmationsSupersededByComment: vi.fn(async () => []),
-  expireRequestConfirmationsSupersededByCloseoutComment: vi.fn(async () => []),
 }));
 const mockIssueApprovalService = vi.hoisted(() => ({
   listApprovalsForIssue: vi.fn(async () => []),
@@ -180,7 +179,6 @@ describe("issue execution policy routes", () => {
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
     mockIssueThreadInteractionService.listForIssue.mockResolvedValue([]);
     mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByComment.mockResolvedValue([]);
-    mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByCloseoutComment.mockResolvedValue([]);
     mockIssueApprovalService.listApprovalsForIssue.mockResolvedValue([]);
     mockDbSelect.mockImplementation(() => ({ from: mockDbSelectFrom }));
     mockDbSelectFrom.mockImplementation(() => ({ where: mockDbSelectWhere }));
@@ -468,17 +466,23 @@ describe("issue execution policy routes", () => {
         authorAgentId: reviewerAgentId,
         authorUserId: null,
       });
-      mockAccessService.decide.mockImplementation(async (input: { action?: string; actor?: { type?: string } }) => {
+      mockAccessService.decide.mockImplementation(async (
+        input: { action?: string; actor?: { type?: string }; scope?: Record<string, unknown> },
+      ) => {
+        const managedCloseoutScope = input.scope?.managedInReviewCloseout === true;
         const allowed = input.actor?.type === "board"
           ? true
           : input.action === "company_scope:read"
             || input.action === "issue:read"
-            || input.action === "tasks:manage_active_checkouts";
+            || input.action === "tasks:manage_active_checkouts"
+            || (input.action === "issue:mutate" && managedCloseoutScope);
         return {
           allowed,
           action: input.action,
           reason: allowed
-            ? (input.action === "tasks:manage_active_checkouts" ? "allow_manager_chain" : "allow_explicit_grant")
+            ? (input.action === "tasks:manage_active_checkouts" || input.action === "issue:mutate"
+              ? "allow_manager_chain"
+              : "allow_explicit_grant")
             : "deny_missing_grant",
           explanation: allowed ? "Allowed by test grant." : `Missing permission: ${input.action ?? "action"}`,
         };
@@ -511,10 +515,14 @@ describe("issue execution policy routes", () => {
         }),
         expect.any(Object),
       );
+      expect(mockAccessService.decide).toHaveBeenCalledWith(expect.objectContaining({
+        action: "issue:mutate",
+        scope: expect.objectContaining({ managedInReviewCloseout: true }),
+      }));
     },
   );
 
-  it("allows an authorized manager to close out a report-owned in_review issue with a pending request_confirmation", async () => {
+  it("does not let manager closeout bypass a pending request_confirmation interaction", async () => {
     const reviewerAgentId = "44444444-4444-4444-8444-444444444444";
     const issue = {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -539,38 +547,27 @@ describe("issue execution policy routes", () => {
       authorUserId: null,
     };
     mockIssueService.getById.mockResolvedValue(issue);
-    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
-      ...issue,
-      ...patch,
-      updatedAt: new Date(),
-    }));
     mockIssueService.addComment.mockResolvedValue(comment);
     mockIssueThreadInteractionService.listForIssue.mockResolvedValue([
       { id: "interaction-1", kind: "request_confirmation", status: "pending" },
     ]);
-    mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByCloseoutComment.mockResolvedValue([
-      {
-        id: "interaction-1",
-        kind: "request_confirmation",
-        status: "expired",
-        result: {
-          version: 1,
-          outcome: "superseded_by_comment",
-          commentId: comment.id,
-        },
-      },
-    ]);
-    mockAccessService.decide.mockImplementation(async (input: { action?: string; actor?: { type?: string } }) => {
+    mockAccessService.decide.mockImplementation(async (
+      input: { action?: string; actor?: { type?: string }; scope?: Record<string, unknown> },
+    ) => {
+      const managedCloseoutScope = input.scope?.managedInReviewCloseout === true;
       const allowed = input.actor?.type === "board"
         ? true
         : input.action === "company_scope:read"
           || input.action === "issue:read"
-          || input.action === "tasks:manage_active_checkouts";
+          || input.action === "tasks:manage_active_checkouts"
+          || (input.action === "issue:mutate" && managedCloseoutScope);
       return {
         allowed,
         action: input.action,
         reason: allowed
-          ? (input.action === "tasks:manage_active_checkouts" ? "allow_manager_chain" : "allow_explicit_grant")
+          ? (input.action === "tasks:manage_active_checkouts" || input.action === "issue:mutate"
+            ? "allow_manager_chain"
+            : "allow_explicit_grant")
           : "deny_missing_grant",
         explanation: allowed ? "Allowed by test grant." : `Missing permission: ${input.action ?? "action"}`,
       };
@@ -581,32 +578,13 @@ describe("issue execution policy routes", () => {
       agentId: reviewerAgentId,
       companyId: "company-1",
       runId: "run-manager-closeout-stale-confirmation",
-    }))
+      }))
       .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
       .send({ status: "done", comment: "Approved after merge." });
 
-    expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockIssueService.update).toHaveBeenCalledWith(
-      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      expect.objectContaining({
-        status: "done",
-        actorAgentId: reviewerAgentId,
-        actorUserId: null,
-      }),
-    );
-    expect(mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByCloseoutComment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: issue.id,
-        companyId: issue.companyId,
-      }),
-      expect.objectContaining({
-        id: comment.id,
-      }),
-      expect.objectContaining({
-        agentId: reviewerAgentId,
-        userId: null,
-      }),
-    );
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Issue is outside this actor's authorization boundary");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
   it("does not let manager closeout bypass an active execution participant", async () => {
@@ -634,17 +612,23 @@ describe("issue execution policy routes", () => {
       },
     };
     mockIssueService.getById.mockResolvedValue(issue);
-    mockAccessService.decide.mockImplementation(async (input: { action?: string; actor?: { type?: string } }) => {
+    mockAccessService.decide.mockImplementation(async (
+      input: { action?: string; actor?: { type?: string }; scope?: Record<string, unknown> },
+    ) => {
+      const managedCloseoutScope = input.scope?.managedInReviewCloseout === true;
       const allowed = input.actor?.type === "board"
         ? true
         : input.action === "company_scope:read"
           || input.action === "issue:read"
-          || input.action === "tasks:manage_active_checkouts";
+          || input.action === "tasks:manage_active_checkouts"
+          || (input.action === "issue:mutate" && managedCloseoutScope);
       return {
         allowed,
         action: input.action,
         reason: allowed
-          ? (input.action === "tasks:manage_active_checkouts" ? "allow_manager_chain" : "allow_explicit_grant")
+          ? (input.action === "tasks:manage_active_checkouts" || input.action === "issue:mutate"
+            ? "allow_manager_chain"
+            : "allow_explicit_grant")
           : "deny_missing_grant",
         explanation: allowed ? "Allowed by test grant." : `Missing permission: ${input.action ?? "action"}`,
       };

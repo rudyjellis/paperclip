@@ -2095,6 +2095,7 @@ export function issueRoutes(
       status: string;
     },
     action: "issue:comment" | "issue:read" | "issue:mutate",
+    extraScope?: Record<string, unknown>,
   ) {
     return access.decide({
       actor: req.actor,
@@ -2115,6 +2116,7 @@ export function issueRoutes(
         parentIssueId: issue.parentId,
         assigneeAgentId: issue.assigneeAgentId,
         assigneeUserId: issue.assigneeUserId,
+        ...(extraScope ?? {}),
       },
     });
   }
@@ -2217,12 +2219,7 @@ export function issueRoutes(
     return comment.length > 0;
   }
 
-  function isManagedInReviewCloseoutSupersedableInteraction(interaction: { kind: string; status: string }) {
-    return interaction.status === "pending"
-      && (interaction.kind === "request_confirmation" || interaction.kind === "request_checkbox_confirmation");
-  }
-
-  async function hasManagedInReviewCloseoutOverride(
+  async function canUseManagedInReviewCloseoutPath(
     req: Request,
     issue: {
       id: string;
@@ -2241,18 +2238,15 @@ export function issueRoutes(
     if (!isManagedInReviewCloseoutPatch(body)) return false;
 
     const executionState = parseIssueExecutionState(issue.executionState);
-    if (executionState?.status === "pending") return false;
+    if (executionState?.currentParticipant) return false;
 
     const interactions = await issueThreadInteractionsSvc.listForIssue(issue.id);
-    const pendingInteractions = interactions.filter((interaction) => interaction.status === "pending");
-    if (pendingInteractions.some((interaction) => !isManagedInReviewCloseoutSupersedableInteraction(interaction))) {
-      return false;
-    }
+    if (interactions.some((interaction) => interaction.status === "pending")) return false;
 
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(issue.id);
     if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return false;
 
-    return hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId);
+    return true;
   }
 
   async function assertAgentIssueMutationAllowed(
@@ -2266,6 +2260,9 @@ export function issueRoutes(
       status: string;
       assigneeAgentId: string | null;
       assigneeUserId: string | null;
+    },
+    options?: {
+      managedInReviewCloseout?: boolean;
     },
   ) {
     if (req.actor.type !== "agent") return true;
@@ -2297,7 +2294,12 @@ export function issueRoutes(
       }
       return assertFreshTaskWatchdogSourceMutation(res, watchdogScope, issue);
     }
-    const boundaryDecision = await decideIssueAccess(req, issue, "issue:mutate");
+    const boundaryDecision = await decideIssueAccess(
+      req,
+      issue,
+      "issue:mutate",
+      options?.managedInReviewCloseout ? { managedInReviewCloseout: true } : undefined,
+    );
     if (!boundaryDecision.allowed) {
       res.status(403).json({ error: "Issue is outside this actor's authorization boundary" });
       return false;
@@ -6056,12 +6058,17 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
-    const managedInReviewCloseoutOverride = await hasManagedInReviewCloseoutOverride(
+    const managedInReviewCloseoutPath = await canUseManagedInReviewCloseoutPath(
       req,
       existing,
       req.body as Record<string, unknown>,
     );
-    if (!managedInReviewCloseoutOverride && !(await assertAgentIssueMutationAllowed(req, res, existing))) return;
+    if (!(await assertAgentIssueMutationAllowed(
+      req,
+      res,
+      existing,
+      managedInReviewCloseoutPath ? { managedInReviewCloseout: true } : undefined,
+    ))) return;
     if (!(await assertCheapRecoveryIssueAssigneeProfileAllowed(req, res, existing, req.body))) return;
 
     const actor = getActorInfo(req);
@@ -6817,28 +6824,19 @@ export function issueRoutes(
         },
       });
 
-      const expiredInteractions = managedInReviewCloseoutOverride
-        ? await issueThreadInteractionsSvc.expireRequestConfirmationsSupersededByCloseoutComment(
-            issue,
-            comment,
-            {
-              agentId: actor.agentId,
-              userId: actor.actorType === "user" ? actor.actorId : null,
-            },
-          )
-        : await issueThreadInteractionsSvc.expireRequestConfirmationsSupersededByComment(
-            issue,
-            comment,
-            {
-              agentId: actor.agentId,
-              userId: actor.actorType === "user" ? actor.actorId : null,
-            },
-          );
+      const expiredInteractions = await issueThreadInteractionsSvc.expireRequestConfirmationsSupersededByComment(
+        issue,
+        comment,
+        {
+          agentId: actor.agentId,
+          userId: actor.actorType === "user" ? actor.actorId : null,
+        },
+      );
       await logExpiredRequestConfirmations({
         issue,
         interactions: expiredInteractions,
         actor,
-        source: managedInReviewCloseoutOverride ? "issue.managed_closeout_comment" : "issue.comment",
+        source: "issue.comment",
       });
 
     } else if (updateReferenceSummaryAfter) {
