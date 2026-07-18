@@ -1562,6 +1562,15 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "get",
+  path: "/api/issues/{id}/reviewed-artifacts",
+  tags: ["issues"],
+  summary: "List reviewed artifacts for an issue",
+  request: { params: z.object({ id: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
+});
+
+registry.registerPath({
   method: "put",
   path: "/api/issues/{id}/watchdog",
   tags: ["issues"],
@@ -2475,6 +2484,15 @@ registry.registerPath({
   summary: "List approval comments",
   request: { params: z.object({ id: z.string() }) },
   responses: { 200: r.ok(), 401: r.unauthorized },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/approvals/{id}/reviewed-artifacts",
+  tags: ["approvals"],
+  summary: "List reviewed artifacts for an approval",
+  request: { params: z.object({ id: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
 });
 
 registry.registerPath({

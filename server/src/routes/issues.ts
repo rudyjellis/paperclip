@@ -95,6 +95,7 @@ import {
   documentAnnotationService,
   logActivity,
   projectService,
+  reviewedArtifactReadModelService,
   routineService,
   workProductService,
 } from "../services/index.js";
@@ -1311,6 +1312,7 @@ export function issueRoutes(
   const recoveryActionsSvc = issueRecoveryActionService(db);
   const executionWorkspacesSvc = executionWorkspaceServiceDirect(db);
   const workProductsSvc = workProductService(db);
+  const reviewedArtifactsReadSvc = reviewedArtifactReadModelService(db);
   const documentsSvc = documentService(db);
   const documentAnnotationsSvc = documentAnnotationService(db);
   const issueReferencesSvc = issueReferenceService(db);
@@ -3700,6 +3702,25 @@ export function issueRoutes(
       workProducts,
       linkedCases,
     });
+  });
+
+  router.get("/issues/:id/reviewed-artifacts", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    if (!(await assertIssueReadAllowed(req, res, issue))) return;
+
+    const response = await reviewedArtifactsReadSvc.getForIssue({
+      companyId: issue.companyId,
+      issueId: issue.id,
+      actorType: req.actor.type === "agent" ? "agent" : "board",
+      canReadSourceIssue: async (sourceIssue) => (await decideIssueAccess(req, sourceIssue, "issue:read")).allowed,
+    });
+    res.json(response);
   });
 
   router.get("/issues/:id/watchdog", async (req, res) => {

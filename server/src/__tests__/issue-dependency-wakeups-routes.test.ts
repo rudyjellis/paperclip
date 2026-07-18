@@ -71,6 +71,7 @@ vi.mock("../services/index.js", () => ({
     expireRequestConfirmationsSupersededByComment: vi.fn(async () => []),
     expireStaleRequestConfirmationsForIssueDocument: vi.fn(async () => []),
   }),
+  reviewedArtifactReadModelService: () => ({}),
   issueService: () => mockIssueService,
   logActivity: vi.fn(async () => undefined),
   projectService: () => ({

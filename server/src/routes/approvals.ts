@@ -16,6 +16,7 @@ import {
   heartbeatService,
   issueApprovalService,
   logActivity,
+  reviewedArtifactReadModelService,
   secretService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -50,6 +51,7 @@ export function approvalRoutes(
     pluginWorkerManager: options.pluginWorkerManager,
   });
   const issueApprovalsSvc = issueApprovalService(db);
+  const reviewedArtifactsReadSvc = reviewedArtifactReadModelService(db);
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
@@ -71,6 +73,42 @@ export function approvalRoutes(
     if (decision.allowed) return true;
     res.status(403).json({ error: "Approvals are outside this actor's authorization boundary" });
     return false;
+  }
+
+  async function canReadIssue(
+    req: Request,
+    issue: {
+      id: string;
+      companyId: string;
+      projectId: string | null;
+      parentId: string | null;
+      assigneeAgentId: string | null;
+      assigneeUserId: string | null;
+      status: string;
+    },
+  ) {
+    const decision = await access.decide({
+      actor: req.actor,
+      action: "issue:read",
+      resource: {
+        type: "issue",
+        companyId: issue.companyId,
+        issueId: issue.id,
+        projectId: issue.projectId,
+        parentIssueId: issue.parentId,
+        assigneeAgentId: issue.assigneeAgentId,
+        assigneeUserId: issue.assigneeUserId,
+        status: issue.status,
+      },
+      scope: {
+        issueId: issue.id,
+        projectId: issue.projectId,
+        parentIssueId: issue.parentId,
+        assigneeAgentId: issue.assigneeAgentId,
+        assigneeUserId: issue.assigneeUserId,
+      },
+    });
+    return decision.allowed;
   }
 
   async function assertApprovalMutationAllowedByRunContext(req: Request, res: any, companyId: string) {
@@ -191,6 +229,26 @@ export function approvalRoutes(
     if (!(await assertApprovalAccessAllowed(req, res, approval.companyId))) return;
     const issues = await issueApprovalsSvc.listIssuesForApproval(id);
     res.json(issues);
+  });
+
+  router.get("/approvals/:id/reviewed-artifacts", async (req, res) => {
+    const id = req.params.id as string;
+    const approval = await svc.getById(id);
+    if (!approval) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+    assertCompanyAccess(req, approval.companyId);
+    if (!(await assertApprovalAccessAllowed(req, res, approval.companyId))) return;
+
+    const response = await reviewedArtifactsReadSvc.getForApproval({
+      companyId: approval.companyId,
+      approvalId: approval.id,
+      approvalPayload: redactEventPayload(approval.payload) ?? {},
+      actorType: req.actor.type === "agent" ? "agent" : "board",
+      canReadSourceIssue: async (issue) => canReadIssue(req, issue),
+    });
+    res.json(response);
   });
 
   router.post("/approvals/:id/approve", validate(resolveApprovalSchema), async (req, res) => {

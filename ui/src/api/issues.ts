@@ -14,6 +14,7 @@ import type {
   IssueDocument,
   IssueLabel,
   IssueRecoveryAction,
+  ReviewedArtifactsResponse,
   IssueRetryNowResponse,
   IssueThreadInteraction,
   IssueTreeControlPreview,
@@ -129,6 +130,8 @@ export const issuesApi = {
     api.post<IssueLabel>(`/companies/${companyId}/labels`, data),
   deleteLabel: (id: string) => api.delete<IssueLabel>(`/labels/${id}`),
   get: (id: string) => api.get<Issue>(`/issues/${id}`),
+  getReviewedArtifacts: (id: string) =>
+    api.get<ReviewedArtifactsResponse>(`/issues/${id}/reviewed-artifacts`),
   getWatchdog: (id: string) => api.get<IssueWatchdog | null>(`/issues/${id}/watchdog`),
   upsertWatchdog: (id: string, data: UpsertIssueWatchdog) =>
     api.put<IssueWatchdog>(`/issues/${id}/watchdog`, data),

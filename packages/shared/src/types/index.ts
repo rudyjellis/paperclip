@@ -266,6 +266,25 @@ export type {
   AttachmentArtifactWorkProductMetadata,
 } from "./work-product.js";
 export type {
+  ReviewedArtifactContext,
+  ReviewedArtifactContextType,
+  ReviewedArtifactDisplayHint,
+  ReviewedArtifactSelectionMode,
+  ReviewedArtifactSource,
+  ReviewedArtifactSourceType,
+  ReviewedArtifactItem,
+  ReviewedArtifactSet,
+  ReviewedArtifactPreviewMode,
+  ReviewedArtifactResolutionStatus,
+  ReviewedArtifactIssueSummary,
+  ReviewedArtifactResolution,
+  ReviewedArtifactPreview,
+  ReviewedArtifactDocumentMetadata,
+  ReviewedArtifactResolved,
+  ReviewedArtifactError,
+  ReviewedArtifactsResponse,
+} from "./reviewed-artifact.js";
+export type {
   CompanyArtifact,
   CompanyArtifactAgentSummary,
   CompanyArtifactGroup,

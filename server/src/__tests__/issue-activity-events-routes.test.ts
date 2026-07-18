@@ -112,6 +112,7 @@ function registerModuleMocks() {
       expireRequestConfirmationsSupersededByComment: vi.fn(async () => []),
       expireStaleRequestConfirmationsForIssueDocument: vi.fn(async () => []),
     }),
+    reviewedArtifactReadModelService: () => ({}),
     issueService: () => mockIssueService,
     logActivity: mockLogActivity,
     projectService: () => ({}),
