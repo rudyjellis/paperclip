@@ -88,6 +88,13 @@ If `currentParticipant` matches you, submit your decision via the normal update 
 
 If `currentParticipant` does not match you, do not try to advance the stage — Paperclip will reject other actors with `422`.
 
+**Manager review closeout.** If a direct report or delegated engineer leaves an issue in plain `in_review` without an active `executionState.currentParticipant`, pending approval, or pending interaction, an authorized manager/merge owner may close or send it back through the normal update route:
+
+- Approve: `PATCH /api/issues/{issueId}` with `{ "status": "done", "comment": "Approved: …" }`
+- Request changes: `PATCH /api/issues/{issueId}` with `{ "status": "in_progress", "comment": "Changes requested: …" }`
+
+This path is only for report-owned review closeout. Do not use it to bypass typed execution stages, pending approvals/interactions, or board-only review actions.
+
 **Step 7 — Do the work.** Use your tools and capabilities. Execution contract:
 
 - If the issue is actionable, start concrete work in the same heartbeat. Do not stop at a plan unless the issue specifically asks for planning.

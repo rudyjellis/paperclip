@@ -2207,6 +2207,46 @@ export function issueRoutes(
     return decision.allowed;
   }
 
+  function isManagedInReviewCloseoutPatch(body: Record<string, unknown>) {
+    const populatedEntries = Object.entries(body).filter(([, value]) => value !== undefined);
+    if (populatedEntries.length === 0) return false;
+    if (!populatedEntries.every(([key]) => key === "status" || key === "comment")) return false;
+    const requestedStatus = body.status;
+    if (requestedStatus !== "done" && requestedStatus !== "in_progress") return false;
+    const comment = typeof body.comment === "string" ? body.comment.trim() : "";
+    return comment.length > 0;
+  }
+
+  async function hasManagedInReviewCloseoutOverride(
+    req: Request,
+    issue: {
+      id: string;
+      companyId: string;
+      status: string;
+      assigneeAgentId: string | null;
+      assigneeUserId: string | null;
+      executionState?: unknown;
+    },
+    body: Record<string, unknown>,
+  ) {
+    if (req.actor.type !== "agent") return false;
+    const actorAgentId = req.actor.agentId;
+    if (!actorAgentId || issue.status !== "in_review") return false;
+    if (!issue.assigneeAgentId || issue.assigneeAgentId === actorAgentId || issue.assigneeUserId) return false;
+    if (!isManagedInReviewCloseoutPatch(body)) return false;
+
+    const executionState = parseIssueExecutionState(issue.executionState);
+    if (executionState?.status === "pending") return false;
+
+    const interactions = await issueThreadInteractionService(db).listForIssue(issue.id);
+    if (interactions.some((interaction) => interaction.status === "pending")) return false;
+
+    const approvals = await issueApprovalsSvc.listApprovalsForIssue(issue.id);
+    if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return false;
+
+    return hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId);
+  }
+
   async function assertAgentIssueMutationAllowed(
     req: Request,
     res: Response,
@@ -6008,7 +6048,12 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
-    if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
+    const managedInReviewCloseoutOverride = await hasManagedInReviewCloseoutOverride(
+      req,
+      existing,
+      req.body as Record<string, unknown>,
+    );
+    if (!managedInReviewCloseoutOverride && !(await assertAgentIssueMutationAllowed(req, res, existing))) return;
     if (!(await assertCheapRecoveryIssueAssigneeProfileAllowed(req, res, existing, req.body))) return;
 
     const actor = getActorInfo(req);
