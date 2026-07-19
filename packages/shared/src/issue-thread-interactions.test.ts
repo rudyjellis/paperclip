@@ -104,6 +104,41 @@ describe("issue thread interaction schemas", () => {
     }
   });
 
+  it("accepts explicit engineering PR review surrogate metadata for request_confirmation interactions", () => {
+    const parsed = createIssueThreadInteractionSchema.parse({
+      kind: "request_confirmation",
+      continuationPolicy: "wake_assignee_on_accept",
+      payload: {
+        version: 1,
+        prompt: "Approve the PR for merge?",
+        reviewSurrogate: {
+          kind: "engineering_pr_review",
+          reviewerResolution: "manager_closeout",
+        },
+        target: {
+          type: "custom",
+          key: "pr-29",
+          revisionId: "78c70dc91bebcd95bcf63e21c1176cc5034d9bf6",
+          revisionNumber: 1,
+          label: "PR #29",
+          href: "https://github.com/rudyjellis/paperclip/pull/29",
+        },
+      },
+    });
+
+    expect(parsed.kind).toBe("request_confirmation");
+    if (parsed.kind !== "request_confirmation") return;
+    expect(parsed.payload.reviewSurrogate).toMatchObject({
+      kind: "engineering_pr_review",
+      reviewerResolution: "manager_closeout",
+    });
+    expect(parsed.payload.target).toMatchObject({
+      type: "custom",
+      key: "pr-29",
+      href: "https://github.com/rudyjellis/paperclip/pull/29",
+    });
+  });
+
   it("parses ask_user_questions supersede flags and expired results", () => {
     const parsed = createIssueThreadInteractionSchema.parse({
       kind: "ask_user_questions",

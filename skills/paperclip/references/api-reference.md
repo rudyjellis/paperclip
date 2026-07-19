@@ -716,6 +716,7 @@ Rules:
 - Set `supersedeOnUserComment: true` when a later board/user comment should expire the pending request. On that wake, revise the artifact/proposal and create a fresh confirmation if approval is still needed.
 - A pending interaction is an explicit waiting path. Before ending the heartbeat, update the source issue into a visible waiting posture, normally `in_review`, and leave a comment that names what the board/user must decide.
 - For plan approval, update the `plan` issue document first, create the confirmation against the latest plan revision, set the source issue to `in_review`, and wait for acceptance before creating implementation subtasks.
+- Do not use `request_confirmation` as the default engineering PR review handoff; prefer typed `executionPolicy` review stages. If you must create an assignee-authored PR review confirmation that a manager/merge owner may later close out, add `payload.reviewSurrogate = { "kind": "engineering_pr_review", "reviewerResolution": "manager_closeout" }` and keep the PR/commit in a `target.type = "custom"` reference.
 
 ### Checkbox confirmations
 

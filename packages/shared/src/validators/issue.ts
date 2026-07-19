@@ -744,6 +744,11 @@ export const requestConfirmationTargetSchema = z.discriminatedUnion("type", [
   requestConfirmationCustomTargetSchema,
 ]);
 
+export const requestConfirmationReviewSurrogateSchema = z.object({
+  kind: z.literal("engineering_pr_review"),
+  reviewerResolution: z.literal("manager_closeout"),
+});
+
 export const requestConfirmationPayloadSchema = z.object({
   version: z.literal(1),
   prompt: z.string().trim().min(1).max(1000),
@@ -755,6 +760,7 @@ export const requestConfirmationPayloadSchema = z.object({
   declineReasonPlaceholder: z.string().trim().min(1).max(240).nullable().optional(),
   detailsMarkdown: z.string().max(20000).nullable().optional(),
   supersedeOnUserComment: z.boolean().optional(),
+  reviewSurrogate: requestConfirmationReviewSurrogateSchema.nullable().optional(),
   target: requestConfirmationTargetSchema.nullable().optional(),
 });
 

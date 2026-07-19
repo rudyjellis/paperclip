@@ -827,6 +827,11 @@ export type RequestConfirmationTarget =
   | RequestConfirmationIssueDocumentTarget
   | RequestConfirmationCustomTarget;
 
+export interface RequestConfirmationReviewSurrogate {
+  kind: "engineering_pr_review";
+  reviewerResolution: "manager_closeout";
+}
+
 export interface RequestConfirmationPayload {
   version: 1;
   prompt: string;
@@ -838,6 +843,7 @@ export interface RequestConfirmationPayload {
   declineReasonPlaceholder?: string | null;
   detailsMarkdown?: string | null;
   supersedeOnUserComment?: boolean;
+  reviewSurrogate?: RequestConfirmationReviewSurrogate | null;
   target?: RequestConfirmationTarget | null;
 }
 
