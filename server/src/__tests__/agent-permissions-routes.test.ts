@@ -87,6 +87,11 @@ const mockIssueApprovalService = vi.hoisted(() => ({
 
 const mockIssueService = vi.hoisted(() => ({
   list: vi.fn(),
+  listDependencyReadiness: vi.fn(),
+}));
+
+const mockIssueRecoveryActionService = vi.hoisted(() => ({
+  listActiveForIssues: vi.fn(),
 }));
 
 const mockSecretService = vi.hoisted(() => ({
@@ -200,6 +205,7 @@ function registerModuleMocks() {
     heartbeatService: () => mockHeartbeatService,
     ISSUE_LIST_DEFAULT_LIMIT: 500,
     issueApprovalService: () => mockIssueApprovalService,
+    issueRecoveryActionService: () => mockIssueRecoveryActionService,
     issueService: () => mockIssueService,
     logActivity: mockLogActivity,
     secretService: () => mockSecretService,
@@ -1676,6 +1682,75 @@ describe.sequential("agent permission routes", () => {
       status: "backlog,todo,in_progress,in_review,blocked,done",
       limit: 500,
     });
+  });
+
+  it("includes assignee-owned in_review issues in inbox-lite", async () => {
+    mockIssueService.list.mockResolvedValue([
+      {
+        id: "issue-2",
+        identifier: "PAP-911",
+        title: "Waiting on confirmation",
+        status: "in_review",
+        priority: "high",
+        projectId: "project-1",
+        goalId: "goal-1",
+        parentId: null,
+        updatedAt: "2026-07-19T05:00:00.000Z",
+        activeRun: null,
+      },
+    ]);
+    mockIssueService.listDependencyReadiness.mockResolvedValue(new Map([
+      [
+        "issue-2",
+        {
+          issueId: "issue-2",
+          isDependencyReady: true,
+          unresolvedBlockerCount: 0,
+          unresolvedBlockerIssueIds: [],
+          blockerIssueIds: [],
+        },
+      ],
+    ]));
+    mockIssueRecoveryActionService.listActiveForIssues.mockResolvedValue(new Map());
+
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: "run-1",
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .get("/api/agents/me/inbox-lite"));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      {
+        id: "issue-2",
+        identifier: "PAP-911",
+        title: "Waiting on confirmation",
+        status: "in_review",
+        priority: "high",
+        projectId: "project-1",
+        goalId: "goal-1",
+        parentId: null,
+        updatedAt: "2026-07-19T05:00:00.000Z",
+        activeRun: null,
+        activeRecoveryAction: null,
+        dependencyReady: true,
+        unresolvedBlockerCount: 0,
+        unresolvedBlockerIssueIds: [],
+      },
+    ]);
+    expect(mockIssueService.list).toHaveBeenCalledWith(companyId, {
+      assigneeAgentId: agentId,
+      status: "todo,in_progress,in_review,blocked",
+      includeRoutineExecutions: true,
+      limit: 500,
+    });
+    expect(mockIssueService.listDependencyReadiness).toHaveBeenCalledWith(companyId, ["issue-2"]);
+    expect(mockIssueRecoveryActionService.listActiveForIssues).toHaveBeenCalledWith(companyId, ["issue-2"]);
   });
 
   describe("agent configuration read gate", () => {

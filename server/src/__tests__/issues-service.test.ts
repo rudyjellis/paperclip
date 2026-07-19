@@ -298,6 +298,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(issueThreadInteractions);
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issueDocuments);
@@ -1617,6 +1618,66 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
 
     await expect(svc.countUnreadTouchedByUser(companyId, userId, "todo")).resolves.toBe(1);
     await expect(svc.countUnreadTouchedByUser(companyId, userId, ["todo", "in_progress"])).resolves.toBe(1);
+  });
+
+  it("lists assignee-owned in_review issues that have a pending interaction", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const interactionId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      identifier: "PAP-1867",
+      title: "Review waiting on confirmation",
+      status: "in_review",
+      priority: "high",
+      assigneeAgentId: agentId,
+    });
+    await db.insert(issueThreadInteractions).values({
+      id: interactionId,
+      companyId,
+      issueId,
+      kind: "request_confirmation",
+      status: "pending",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        prompt: "Approve the review handoff?",
+      },
+      createdByUserId: "local-board",
+    });
+
+    await expect(svc.list(companyId, {
+      assigneeAgentId: agentId,
+      status: "in_review",
+      includeRoutineExecutions: true,
+      limit: 50,
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: issueId,
+        status: "in_review",
+        assigneeAgentId: agentId,
+      }),
+    ]));
   });
 
   it("accepts array-form status filters in list and count", async () => {
