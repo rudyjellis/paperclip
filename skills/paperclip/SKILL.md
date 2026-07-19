@@ -88,7 +88,7 @@ If `currentParticipant` matches you, submit your decision via the normal update 
 
 If `currentParticipant` does not match you, do not try to advance the stage — Paperclip will reject other actors with `422`.
 
-**Manager review closeout.** If a direct report or delegated engineer leaves an issue in plain `in_review` without an active `executionState.currentParticipant` or pending approval, an authorized manager/merge owner may close or send it back through the normal update route. Pending interactions still block closeout unless they are legacy assignee-authored targetless `request_confirmation` review surrogates, which manager closeout supersedes automatically with an audit trail:
+**Manager review closeout.** If a direct report or delegated engineer leaves an issue in plain `in_review` without an active `executionState.currentParticipant` or pending approval, an authorized manager/merge owner may close or send it back through the normal update route. Pending interactions still block closeout unless they are eligible assignee-authored review-surrogate `request_confirmation` cards (legacy targetless cards, or explicit engineering PR review cards marked with `payload.reviewSurrogate = { kind: "engineering_pr_review", reviewerResolution: "manager_closeout" }`), which manager closeout supersedes automatically with an audit trail:
 
 - Approve: `PATCH /api/issues/{issueId}` with `{ "status": "done", "comment": "Approved: …" }`
 - Request changes: `PATCH /api/issues/{issueId}` with `{ "status": "in_progress", "comment": "Changes requested: …" }`

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { canonicalizeExternalObjectUrl } from "@paperclipai/shared/external-objects-server";
 import {
   agents,
   documents,
@@ -20,6 +21,7 @@ import type {
   IssueThreadInteraction,
   RequestCheckboxConfirmationInteraction,
   RequestConfirmationInteraction,
+  RequestConfirmationPayload,
   RequestConfirmationTarget,
   RejectIssueThreadInteraction,
   RespondIssueThreadInteraction,
@@ -104,6 +106,35 @@ function isUserCommentSupersedableKind(kind: string): kind is UserCommentSuperse
   return (USER_COMMENT_SUPERSEDABLE_INTERACTION_KINDS as readonly string[]).includes(kind);
 }
 
+function isExplicitManagerCloseoutEngineeringPrReviewSurrogate(payload: RequestConfirmationPayload) {
+  return (
+    payload.reviewSurrogate?.kind === "engineering_pr_review"
+    && payload.reviewSurrogate.reviewerResolution === "manager_closeout"
+  );
+}
+
+function isLegacyGithubPrManagerCloseoutReviewSurrogate(payload: RequestConfirmationPayload) {
+  const target = payload.target;
+  if (payload.reviewSurrogate) return false;
+  if (target?.type !== "custom") return false;
+  if (payload.supersedeOnUserComment !== true) return false;
+  if (payload.rejectRequiresReason !== true) return false;
+
+  const canonical = typeof target.href === "string" ? canonicalizeExternalObjectUrl(target.href) : null;
+  if (!canonical) return false;
+  if (canonical.canonicalIdentity.host !== "github.com") return false;
+  if (!/^\/[^/]+\/[^/]+\/pull\/\d+$/i.test(canonical.canonicalIdentity.path)) return false;
+
+  const prompt = payload.prompt.trim().toLowerCase();
+  const acceptLabel = (payload.acceptLabel ?? "").trim().toLowerCase();
+  const rejectLabel = (payload.rejectLabel ?? "").trim().toLowerCase();
+  return (
+    (prompt.includes("pr") || prompt.includes("pull request"))
+    && acceptLabel.includes("approve")
+    && rejectLabel === "request changes"
+  );
+}
+
 export function isManagedReviewCloseoutSupersedableInteraction(args: {
   interaction: IssueThreadInteraction;
   assigneeAgentId: string | null;
@@ -114,7 +145,11 @@ export function isManagedReviewCloseoutSupersedableInteraction(args: {
   if (args.interaction.createdByUserId) return false;
   if (args.interaction.createdByAgentId !== args.assigneeAgentId) return false;
   if (args.interaction.continuationPolicy === "none") return false;
-  return !args.interaction.payload.target;
+  return (
+    !args.interaction.payload.target
+    || isExplicitManagerCloseoutEngineeringPrReviewSurrogate(args.interaction.payload)
+    || isLegacyGithubPrManagerCloseoutReviewSurrogate(args.interaction.payload)
+  );
 }
 
 function isIssueThreadInteractionIdempotencyConflict(error: unknown): boolean {

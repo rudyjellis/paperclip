@@ -366,6 +366,7 @@ export type {
   AskUserQuestionsResult,
   RequestConfirmationIssueDocumentTarget,
   RequestConfirmationCustomTarget,
+  RequestConfirmationReviewSurrogate,
   RequestConfirmationTarget,
   RequestConfirmationPayload,
   RequestConfirmationResult,

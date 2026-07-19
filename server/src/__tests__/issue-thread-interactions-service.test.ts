@@ -1755,6 +1755,196 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     });
   });
 
+  it("supersedes explicit engineering PR review confirmations during manager closeout", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Managed PR review closeout");
+    const assigneeAgentId = randomUUID();
+    const reviewerAgentId = randomUUID();
+    const commentId = randomUUID();
+
+    await db.insert(agents).values([
+      {
+        id: assigneeAgentId,
+        companyId,
+        name: "Assignee",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: reviewerAgentId,
+        companyId,
+        name: "Reviewer",
+        role: "cto",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+    await db
+      .update(issues)
+      .set({
+        status: "in_review",
+        assigneeAgentId,
+      })
+      .where(eq(issues.id, issueId));
+
+    const created = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "request_confirmation",
+      continuationPolicy: "wake_assignee_on_accept",
+      payload: {
+        version: 1,
+        prompt: "Approve the PR for merge?",
+        reviewSurrogate: {
+          kind: "engineering_pr_review",
+          reviewerResolution: "manager_closeout",
+        },
+        target: {
+          type: "custom",
+          key: "pr-29",
+          revisionId: "78c70dc91bebcd95bcf63e21c1176cc5034d9bf6",
+          revisionNumber: 1,
+          label: "PR #29",
+          href: "https://github.com/rudyjellis/paperclip/pull/29",
+        },
+      },
+    }, {
+      agentId: assigneeAgentId,
+    });
+
+    const expired = await interactionsSvc.supersedeManagedReviewCloseoutInteractions(
+      {
+        id: issueId,
+        companyId,
+        assigneeAgentId,
+      },
+      {
+        interactionIds: [created.id],
+        commentId,
+        reason: "Superseded by authorized manager review closeout.",
+      },
+      {
+        agentId: reviewerAgentId,
+      },
+    );
+
+    expect(expired).toHaveLength(1);
+    expect(expired[0]).toMatchObject({
+      id: created.id,
+      status: "expired",
+      result: {
+        version: 1,
+        outcome: "superseded_by_comment",
+        commentId,
+        reason: "Superseded by authorized manager review closeout.",
+      },
+      resolvedByAgentId: reviewerAgentId,
+      resolvedByUserId: null,
+    });
+  });
+
+  it("supersedes legacy GitHub PR review confirmations during manager closeout", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Legacy managed PR review closeout");
+    const assigneeAgentId = randomUUID();
+    const reviewerAgentId = randomUUID();
+    const commentId = randomUUID();
+
+    await db.insert(agents).values([
+      {
+        id: assigneeAgentId,
+        companyId,
+        name: "Assignee",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: reviewerAgentId,
+        companyId,
+        name: "Reviewer",
+        role: "cto",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+    await db
+      .update(issues)
+      .set({
+        status: "in_review",
+        assigneeAgentId,
+      })
+      .where(eq(issues.id, issueId));
+
+    const created = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "request_confirmation",
+      continuationPolicy: "wake_assignee_on_accept",
+      payload: {
+        version: 1,
+        prompt: "Approve the DIG-2094 PR for merge?",
+        acceptLabel: "Approve PR",
+        rejectLabel: "Request changes",
+        rejectRequiresReason: true,
+        supersedeOnUserComment: true,
+        target: {
+          type: "custom",
+          key: "pr-29",
+          revisionId: "78c70dc91bebcd95bcf63e21c1176cc5034d9bf6",
+          revisionNumber: 1,
+          label: "PR #29",
+          href: "https://github.com/rudyjellis/paperclip/pull/29",
+        },
+      },
+    }, {
+      agentId: assigneeAgentId,
+    });
+
+    const expired = await interactionsSvc.supersedeManagedReviewCloseoutInteractions(
+      {
+        id: issueId,
+        companyId,
+        assigneeAgentId,
+      },
+      {
+        interactionIds: [created.id],
+        commentId,
+        reason: "Superseded by authorized manager review closeout.",
+      },
+      {
+        agentId: reviewerAgentId,
+      },
+    );
+
+    expect(expired).toHaveLength(1);
+    expect(expired[0]).toMatchObject({
+      id: created.id,
+      status: "expired",
+      result: {
+        version: 1,
+        outcome: "superseded_by_comment",
+        commentId,
+        reason: "Superseded by authorized manager review closeout.",
+      },
+      resolvedByAgentId: reviewerAgentId,
+      resolvedByUserId: null,
+    });
+  });
+
   it("rejects manager closeout supersession for target-bound confirmations", async () => {
     const { companyId, issueId } = await seedConfirmationIssue("Managed review closeout target");
     const assigneeAgentId = randomUUID();

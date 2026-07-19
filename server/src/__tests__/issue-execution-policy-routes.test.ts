@@ -618,6 +618,218 @@ describe("issue execution policy routes", () => {
     );
   });
 
+  it("lets manager closeout supersede an explicit engineering PR review confirmation", async () => {
+    const reviewerAgentId = "44444444-4444-4444-8444-444444444444";
+    const assigneeAgentId = "33333333-3333-4333-8333-333333333333";
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "in_review",
+      assigneeAgentId,
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-1013",
+      title: "Engineering PR review closeout",
+      executionPolicy: null,
+      executionState: null,
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+    mockIssueService.addComment.mockResolvedValue({
+      id: "comment-manager-closeout",
+      issueId: issue.id,
+      companyId: issue.companyId,
+      body: "Approved after merge.",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      authorAgentId: reviewerAgentId,
+      authorUserId: null,
+    });
+    mockIssueThreadInteractionService.listForIssue.mockResolvedValue([
+      {
+        id: "interaction-1",
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee_on_accept",
+        createdByAgentId: assigneeAgentId,
+        createdByUserId: null,
+        payload: {
+          version: 1,
+          prompt: "Approve the PR for merge?",
+          reviewSurrogate: {
+            kind: "engineering_pr_review",
+            reviewerResolution: "manager_closeout",
+          },
+          target: {
+            type: "custom",
+            key: "pr-29",
+            revisionId: "78c70dc91bebcd95bcf63e21c1176cc5034d9bf6",
+            revisionNumber: 1,
+            label: "PR #29",
+            href: "https://github.com/rudyjellis/paperclip/pull/29",
+          },
+        },
+      },
+    ]);
+    mockAccessService.decide.mockImplementation(async (
+      input: { action?: string; actor?: { type?: string }; scope?: Record<string, unknown> },
+    ) => {
+      const managedCloseoutScope = input.scope?.managedInReviewCloseout === true;
+      const allowed = input.actor?.type === "board"
+        ? true
+        : input.action === "company_scope:read"
+          || input.action === "issue:read"
+          || input.action === "tasks:manage_active_checkouts"
+          || (input.action === "issue:mutate" && managedCloseoutScope);
+      return {
+        allowed,
+        action: input.action,
+        reason: allowed
+          ? (input.action === "tasks:manage_active_checkouts" || input.action === "issue:mutate"
+            ? "allow_manager_chain"
+            : "allow_explicit_grant")
+          : "deny_missing_grant",
+        explanation: allowed ? "Allowed by test grant." : `Missing permission: ${input.action ?? "action"}`,
+      };
+    });
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: reviewerAgentId,
+      companyId: "company-1",
+      runId: "run-manager-closeout-pr-review",
+    }))
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "done", comment: "Approved after merge." });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueThreadInteractionService.supersedeManagedReviewCloseoutInteractions).toHaveBeenCalledWith(
+      {
+        id: issue.id,
+        companyId: issue.companyId,
+        assigneeAgentId,
+      },
+      expect.objectContaining({
+        interactionIds: ["interaction-1"],
+        commentId: "comment-manager-closeout",
+      }),
+      {
+        agentId: reviewerAgentId,
+        userId: null,
+      },
+    );
+  });
+
+  it("lets manager closeout supersede a legacy GitHub PR review confirmation", async () => {
+    const reviewerAgentId = "44444444-4444-4444-8444-444444444444";
+    const assigneeAgentId = "33333333-3333-4333-8333-333333333333";
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "in_review",
+      assigneeAgentId,
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-1014",
+      title: "Legacy engineering PR review closeout",
+      executionPolicy: null,
+      executionState: null,
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+    mockIssueService.addComment.mockResolvedValue({
+      id: "comment-manager-closeout",
+      issueId: issue.id,
+      companyId: issue.companyId,
+      body: "Approved after merge.",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      authorAgentId: reviewerAgentId,
+      authorUserId: null,
+    });
+    mockIssueThreadInteractionService.listForIssue.mockResolvedValue([
+      {
+        id: "interaction-1",
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee_on_accept",
+        createdByAgentId: assigneeAgentId,
+        createdByUserId: null,
+        payload: {
+          version: 1,
+          prompt: "Approve the DIG-2094 PR for merge?",
+          acceptLabel: "Approve PR",
+          rejectLabel: "Request changes",
+          rejectRequiresReason: true,
+          supersedeOnUserComment: true,
+          target: {
+            type: "custom",
+            key: "pr-29",
+            revisionId: "78c70dc91bebcd95bcf63e21c1176cc5034d9bf6",
+            revisionNumber: 1,
+            label: "PR #29",
+            href: "https://github.com/rudyjellis/paperclip/pull/29",
+          },
+        },
+      },
+    ]);
+    mockAccessService.decide.mockImplementation(async (
+      input: { action?: string; actor?: { type?: string }; scope?: Record<string, unknown> },
+    ) => {
+      const managedCloseoutScope = input.scope?.managedInReviewCloseout === true;
+      const allowed = input.actor?.type === "board"
+        ? true
+        : input.action === "company_scope:read"
+          || input.action === "issue:read"
+          || input.action === "tasks:manage_active_checkouts"
+          || (input.action === "issue:mutate" && managedCloseoutScope);
+      return {
+        allowed,
+        action: input.action,
+        reason: allowed
+          ? (input.action === "tasks:manage_active_checkouts" || input.action === "issue:mutate"
+            ? "allow_manager_chain"
+            : "allow_explicit_grant")
+          : "deny_missing_grant",
+        explanation: allowed ? "Allowed by test grant." : `Missing permission: ${input.action ?? "action"}`,
+      };
+    });
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: reviewerAgentId,
+      companyId: "company-1",
+      runId: "run-manager-closeout-legacy-pr-review",
+    }))
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "done", comment: "Approved after merge." });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueThreadInteractionService.supersedeManagedReviewCloseoutInteractions).toHaveBeenCalledWith(
+      {
+        id: issue.id,
+        companyId: issue.companyId,
+        assigneeAgentId,
+      },
+      expect.objectContaining({
+        interactionIds: ["interaction-1"],
+        commentId: "comment-manager-closeout",
+      }),
+      {
+        agentId: reviewerAgentId,
+        userId: null,
+      },
+    );
+  });
+
   it("does not let manager closeout bypass a board-authored pending request_confirmation interaction", async () => {
     const reviewerAgentId = "44444444-4444-4444-8444-444444444444";
     const issue = {
