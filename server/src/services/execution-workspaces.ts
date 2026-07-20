@@ -76,6 +76,45 @@ async function runGit(args: string[], cwd: string) {
   return await execFileAsync("git", ["-C", cwd, ...args], { cwd });
 }
 
+function isRemoteTrackingRef(ref: string) {
+  return /^[^/]+\/.+$/.test(ref);
+}
+
+async function gitCommitRefExists(cwd: string, ref: string) {
+  try {
+    await runGit(["rev-parse", "--verify", `${ref}^{commit}`], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveAuthoritativeCloseReadinessBaseRef(repoRoot: string, baseRef: string | null) {
+  const trimmed = readNullableString(baseRef);
+  if (!trimmed || isRemoteTrackingRef(trimmed)) {
+    return trimmed;
+  }
+
+  try {
+    const upstream = (await runGit(
+      ["for-each-ref", "--format=%(upstream:short)", `refs/heads/${trimmed}`],
+      repoRoot,
+    )).stdout.trim();
+    if (upstream) {
+      return upstream;
+    }
+  } catch {
+    // Fall through to origin/<branch> probing.
+  }
+
+  const originCandidate = `origin/${trimmed}`;
+  if (await gitCommitRefExists(repoRoot, originCandidate)) {
+    return originCandidate;
+  }
+
+  return trimmed;
+}
+
 async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<{
   git: ExecutionWorkspaceCloseGitReadiness | null;
   warnings: string[];
@@ -158,7 +197,9 @@ async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<
   let aheadCount: number | null = null;
   let behindCount: number | null = null;
   let isMergedIntoBase: boolean | null = null;
-  const baseRef = workspace.baseRef;
+  const baseRef = repoRoot
+    ? await resolveAuthoritativeCloseReadinessBaseRef(repoRoot, workspace.baseRef)
+    : workspace.baseRef;
 
   if (repoRoot && baseRef) {
     try {
