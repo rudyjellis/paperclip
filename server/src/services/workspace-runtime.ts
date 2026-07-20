@@ -1062,6 +1062,82 @@ async function findRegisteredGitWorktreeByBranch(repoRoot: string, branchName: s
   return null;
 }
 
+async function readLocalBranchUpstream(repoRoot: string, branchName: string): Promise<string | null> {
+  return await runGit(
+    ["for-each-ref", "--format=%(upstream:short)", `refs/heads/${branchName}`],
+    repoRoot,
+  )
+    .then((value) => {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    })
+    .catch(() => null);
+}
+
+async function gitRemoteTrackingBranchExists(repoRoot: string, remote: string, branch: string): Promise<boolean> {
+  return await runGit(["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], repoRoot)
+    .then(() => true)
+    .catch(() => false);
+}
+
+// `git worktree add -b <task-branch> ... origin/master` often inherits
+// `origin/master` as the new branch upstream. Paperclip task branches should
+// track their own remote branch when one exists, or have no upstream yet.
+async function normalizeGitWorktreeBranchTracking(input: {
+  repoRoot: string;
+  worktreePath: string;
+  branchName: string;
+  baseRef: string | null;
+  created: boolean;
+  restored: boolean;
+  recorder?: WorkspaceOperationRecorder | null;
+}) {
+  const currentUpstream = await readLocalBranchUpstream(input.repoRoot, input.branchName);
+  const parsedUpstream = currentUpstream ? parseRemoteTrackingRef(currentUpstream) : null;
+  if (!parsedUpstream) return;
+  if (parsedUpstream.branch === input.branchName) return;
+
+  const desiredUpstream = await gitRemoteTrackingBranchExists(
+    input.repoRoot,
+    parsedUpstream.remote,
+    input.branchName,
+  )
+    ? `${parsedUpstream.remote}/${input.branchName}`
+    : null;
+  const metadata = {
+    repoRoot: input.repoRoot,
+    worktreePath: input.worktreePath,
+    branchName: input.branchName,
+    baseRef: input.baseRef,
+    previousUpstream: currentUpstream,
+    nextUpstream: desiredUpstream,
+    created: input.created,
+    restored: input.restored,
+    branchTrackingRepair: true,
+  };
+
+  if (desiredUpstream) {
+    await recordGitOperation(input.recorder, {
+      phase: "worktree_prepare",
+      args: ["branch", `--set-upstream-to=${desiredUpstream}`, input.branchName],
+      cwd: input.repoRoot,
+      metadata,
+      successMessage: `Updated git worktree branch tracking for ${input.branchName}: ${currentUpstream} -> ${desiredUpstream}\n`,
+      failureLabel: `git branch --set-upstream-to=${desiredUpstream} ${input.branchName}`,
+    });
+    return;
+  }
+
+  await recordGitOperation(input.recorder, {
+    phase: "worktree_prepare",
+    args: ["branch", "--unset-upstream", input.branchName],
+    cwd: input.repoRoot,
+    metadata,
+    successMessage: `Cleared inherited git worktree branch tracking for ${input.branchName}: ${currentUpstream}\n`,
+    failureLabel: `git branch --unset-upstream ${input.branchName}`,
+  });
+}
+
 async function findRegisteredGitWorktreeByPath(repoRoot: string, worktreePath: string): Promise<GitWorktreeListEntry | null> {
   const raw = await runGit(["worktree", "list", "--porcelain"], repoRoot).catch(() => null);
   if (!raw) return null;
@@ -1636,6 +1712,15 @@ export async function realizeExecutionWorkspace(input: {
           recorder: input.recorder ?? null,
         })
       : { refreshed: false, baseRefSha: null };
+    await normalizeGitWorktreeBranchTracking({
+      repoRoot,
+      worktreePath: reusablePath,
+      branchName,
+      baseRef,
+      created: false,
+      restored: false,
+      recorder: input.recorder ?? null,
+    });
     const baseDrift = await inspectExecutionWorkspaceBaseDrift({
       repoRoot,
       worktreePath: reusablePath,
@@ -1782,6 +1867,15 @@ export async function realizeExecutionWorkspace(input: {
       return await reuseExistingWorktree(reusablePath);
     }
   }
+  await normalizeGitWorktreeBranchTracking({
+    repoRoot,
+    worktreePath,
+    branchName,
+    baseRef,
+    created: true,
+    restored: false,
+    recorder: input.recorder ?? null,
+  });
   await provisionExecutionWorktree({
     strategy: rawStrategy,
     base: input.base,
@@ -1889,6 +1983,10 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
         },
       );
     }
+    const reuseBranchName = asString(realized.branchName, "").trim();
+    if (!reuseBranchName) {
+      throw new Error(`Persisted git worktree "${reuseWorktreePath}" is missing its branch name.`);
+    }
     const baseRefreshWarnings = reuseBaseRef
       ? await refreshRemoteTrackingBaseRef(repoRoot, reuseBaseRef)
       : [];
@@ -1897,16 +1995,25 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
       ? await refreshUnstartedWorktreeToBase({
           repoRoot,
           worktreePath: reuseWorktreePath,
-          branchName: realized.branchName,
+          branchName: reuseBranchName,
           baseRef: reuseBaseRef,
           currentBaseRefSha,
           recorder: input.recorder ?? null,
         })
       : { refreshed: false, baseRefSha: null };
+    await normalizeGitWorktreeBranchTracking({
+      repoRoot,
+      worktreePath: reuseWorktreePath,
+      branchName: reuseBranchName,
+      baseRef: reuseBaseRef,
+      created: false,
+      restored: true,
+      recorder: input.recorder ?? null,
+    });
     const baseDrift = await inspectExecutionWorkspaceBaseDrift({
       repoRoot,
       worktreePath: reuseWorktreePath,
-      branchName: realized.branchName,
+      branchName: reuseBranchName,
       baseRef: reuseBaseRef,
       recordedBaseRefSha,
       skipRefresh: true,
@@ -1990,6 +2097,15 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
     });
     created = true;
   }
+  await normalizeGitWorktreeBranchTracking({
+    repoRoot,
+    worktreePath,
+    branchName,
+    baseRef: input.workspace.baseRef ?? input.base.repoRef ?? null,
+    created,
+    restored: true,
+    recorder: input.recorder ?? null,
+  });
 
   const baseDrift = await inspectExecutionWorkspaceBaseDrift({
     repoRoot,
