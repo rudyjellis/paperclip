@@ -76,8 +76,26 @@ async function runGit(args: string[], cwd: string) {
   return await execFileAsync("git", ["-C", cwd, ...args], { cwd });
 }
 
-function isRemoteTrackingRef(ref: string) {
-  return /^[^/]+\/.+$/.test(ref);
+function normalizeRemoteTrackingRef(ref: string) {
+  const trimmed = ref.trim();
+  const refsRemotesPrefix = "refs/remotes/";
+  const normalized = trimmed.startsWith(refsRemotesPrefix)
+    ? trimmed.slice(refsRemotesPrefix.length)
+    : trimmed;
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === normalized.length - 1) return null;
+  const remote = normalized.slice(0, slashIndex);
+  if (!/^[A-Za-z0-9._-]+$/.test(remote)) return null;
+  return normalized;
+}
+
+async function gitRefPathExists(cwd: string, refPath: string) {
+  try {
+    await runGit(["show-ref", "--verify", "--quiet", refPath], cwd);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function gitCommitRefExists(cwd: string, ref: string) {
@@ -91,24 +109,43 @@ async function gitCommitRefExists(cwd: string, ref: string) {
 
 async function resolveAuthoritativeCloseReadinessBaseRef(repoRoot: string, baseRef: string | null) {
   const trimmed = readNullableString(baseRef);
-  if (!trimmed || isRemoteTrackingRef(trimmed)) {
+  if (!trimmed) {
     return trimmed;
   }
 
-  try {
-    const upstream = (await runGit(
-      ["for-each-ref", "--format=%(upstream:short)", `refs/heads/${trimmed}`],
-      repoRoot,
-    )).stdout.trim();
-    if (upstream) {
-      return upstream;
+  const remoteTrackingRef = normalizeRemoteTrackingRef(trimmed);
+  if (remoteTrackingRef && await gitRefPathExists(repoRoot, `refs/remotes/${remoteTrackingRef}`)) {
+    return trimmed.startsWith("refs/remotes/") ? trimmed : remoteTrackingRef;
+  }
+
+  const localBranchRef = `refs/heads/${trimmed}`;
+  if (await gitRefPathExists(repoRoot, localBranchRef)) {
+    try {
+      const upstream = (await runGit(
+        ["for-each-ref", "--format=%(upstream:short)", localBranchRef],
+        repoRoot,
+      )).stdout.trim();
+      if (upstream) {
+        return upstream;
+      }
+    } catch {
+      // Fall through to origin/<branch> probing.
     }
-  } catch {
-    // Fall through to origin/<branch> probing.
+
+    const originCandidate = `origin/${trimmed}`;
+    if (await gitRefPathExists(repoRoot, `refs/remotes/${originCandidate}`)) {
+      return originCandidate;
+    }
+
+    return trimmed;
+  }
+
+  if (await gitCommitRefExists(repoRoot, trimmed)) {
+    return trimmed;
   }
 
   const originCandidate = `origin/${trimmed}`;
-  if (await gitCommitRefExists(repoRoot, originCandidate)) {
+  if (await gitRefPathExists(repoRoot, `refs/remotes/${originCandidate}`)) {
     return originCandidate;
   }
 

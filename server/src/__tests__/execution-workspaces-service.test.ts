@@ -940,4 +940,100 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       "This workspace is 1 commit ahead of origin/main and is not merged.",
     ]));
   }, 20_000);
+
+  it("prefers the tracked remote when the configured base branch name itself contains a slash", async () => {
+    const { tempRoot, repoRoot, remoteRoot } = await createTempRemoteRepo();
+    tempDirs.add(tempRoot);
+    const worktreePath = path.join(tempRoot, `paperclip-worktree-${randomUUID()}`);
+    const remoteUpdaterPath = path.join(tempRoot, "remote-updater");
+    tempDirs.add(worktreePath);
+
+    await runGit(repoRoot, ["checkout", "-b", "release/2026.07"]);
+    await runGit(repoRoot, ["push", "-u", "origin", "release/2026.07"]);
+    await runGit(repoRoot, ["branch", "paperclip-close-check"]);
+    await runGit(repoRoot, ["worktree", "add", worktreePath, "paperclip-close-check"]);
+    await fs.writeFile(path.join(worktreePath, "feature.txt"), "hello\n", "utf8");
+    await runGit(worktreePath, ["add", "feature.txt"]);
+    await runGit(worktreePath, ["commit", "-m", "Feature commit"]);
+    await runGit(worktreePath, ["push", "-u", "origin", "paperclip-close-check"]);
+
+    await runGit(tempRoot, ["clone", remoteRoot, remoteUpdaterPath]);
+    await runGit(remoteUpdaterPath, ["config", "user.name", "Paperclip Test"]);
+    await runGit(remoteUpdaterPath, ["config", "user.email", "test@paperclip.local"]);
+    await runGit(remoteUpdaterPath, ["fetch", "origin", "release/2026.07", "paperclip-close-check"]);
+    await runGit(remoteUpdaterPath, ["checkout", "-b", "release/2026.07", "origin/release/2026.07"]);
+    await runGit(remoteUpdaterPath, ["merge", "--ff-only", "origin/paperclip-close-check"]);
+    await runGit(remoteUpdaterPath, ["push", "origin", "release/2026.07"]);
+    await runGit(repoRoot, ["fetch", "origin"]);
+
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const projectWorkspaceId = randomUUID();
+    const executionWorkspaceId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Workspaces",
+      status: "in_progress",
+      executionWorkspacePolicy: {
+        enabled: true,
+      },
+    });
+    await db.insert(projectWorkspaces).values({
+      id: projectWorkspaceId,
+      companyId,
+      projectId,
+      name: "Primary",
+      sourceType: "git_repo",
+      isPrimary: true,
+      cwd: repoRoot,
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId,
+      projectId,
+      projectWorkspaceId,
+      mode: "isolated_workspace",
+      strategyType: "git_worktree",
+      name: "Feature workspace",
+      status: "active",
+      providerType: "git_worktree",
+      cwd: worktreePath,
+      providerRef: worktreePath,
+      branchName: "paperclip-close-check",
+      baseRef: "release/2026.07",
+      metadata: {
+        createdByRuntime: true,
+      },
+    });
+
+    const readiness = await svc.getCloseReadiness(executionWorkspaceId);
+
+    expect(readiness).toMatchObject({
+      workspaceId: executionWorkspaceId,
+      state: "ready",
+      git: {
+        workspacePath: worktreePath,
+        branchName: "paperclip-close-check",
+        baseRef: "origin/release/2026.07",
+        createdByRuntime: true,
+        hasDirtyTrackedFiles: false,
+        hasUntrackedFiles: false,
+        aheadCount: 0,
+        behindCount: 0,
+        isMergedIntoBase: true,
+      },
+    });
+    expect(readiness?.warnings).not.toEqual(expect.arrayContaining([
+      "This workspace is 1 commit ahead of release/2026.07 and is not merged.",
+      "This workspace is 1 commit ahead of origin/release/2026.07 and is not merged.",
+    ]));
+  }, 20_000);
 });
