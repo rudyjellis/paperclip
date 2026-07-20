@@ -865,7 +865,8 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     await runGit(tempRoot, ["clone", path.join(tempRoot, "remote.git"), remoteUpdaterPath]);
     await runGit(remoteUpdaterPath, ["config", "user.name", "Paperclip Test"]);
     await runGit(remoteUpdaterPath, ["config", "user.email", "test@paperclip.local"]);
-    await runGit(remoteUpdaterPath, ["fetch", "origin", "paperclip-close-check"]);
+    await runGit(remoteUpdaterPath, ["fetch", "origin", "main", "paperclip-close-check"]);
+    await runGit(remoteUpdaterPath, ["checkout", "-B", "main", "origin/main"]);
     await runGit(remoteUpdaterPath, ["merge", "--ff-only", "origin/paperclip-close-check"]);
     await runGit(remoteUpdaterPath, ["push", "origin", "main"]);
     await runGit(repoRoot, ["fetch", "origin"]);
@@ -961,7 +962,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     await runGit(remoteUpdaterPath, ["config", "user.name", "Paperclip Test"]);
     await runGit(remoteUpdaterPath, ["config", "user.email", "test@paperclip.local"]);
     await runGit(remoteUpdaterPath, ["fetch", "origin", "release/2026.07", "paperclip-close-check"]);
-    await runGit(remoteUpdaterPath, ["checkout", "-b", "release/2026.07", "origin/release/2026.07"]);
+    await runGit(remoteUpdaterPath, ["checkout", "-B", "release/2026.07", "origin/release/2026.07"]);
     await runGit(remoteUpdaterPath, ["merge", "--ff-only", "origin/paperclip-close-check"]);
     await runGit(remoteUpdaterPath, ["push", "origin", "release/2026.07"]);
     await runGit(repoRoot, ["fetch", "origin"]);
