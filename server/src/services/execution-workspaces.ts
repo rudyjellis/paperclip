@@ -76,6 +76,82 @@ async function runGit(args: string[], cwd: string) {
   return await execFileAsync("git", ["-C", cwd, ...args], { cwd });
 }
 
+function normalizeRemoteTrackingRef(ref: string) {
+  const trimmed = ref.trim();
+  const refsRemotesPrefix = "refs/remotes/";
+  const normalized = trimmed.startsWith(refsRemotesPrefix)
+    ? trimmed.slice(refsRemotesPrefix.length)
+    : trimmed;
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === normalized.length - 1) return null;
+  const remote = normalized.slice(0, slashIndex);
+  if (!/^[A-Za-z0-9._-]+$/.test(remote)) return null;
+  return normalized;
+}
+
+async function gitRefPathExists(cwd: string, refPath: string) {
+  try {
+    await runGit(["show-ref", "--verify", "--quiet", refPath], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function gitCommitRefExists(cwd: string, ref: string) {
+  try {
+    await runGit(["rev-parse", "--verify", `${ref}^{commit}`], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveAuthoritativeCloseReadinessBaseRef(repoRoot: string, baseRef: string | null) {
+  const trimmed = readNullableString(baseRef);
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  const remoteTrackingRef = normalizeRemoteTrackingRef(trimmed);
+  if (remoteTrackingRef && await gitRefPathExists(repoRoot, `refs/remotes/${remoteTrackingRef}`)) {
+    return trimmed.startsWith("refs/remotes/") ? trimmed : remoteTrackingRef;
+  }
+
+  const localBranchRef = `refs/heads/${trimmed}`;
+  if (await gitRefPathExists(repoRoot, localBranchRef)) {
+    try {
+      const upstream = (await runGit(
+        ["for-each-ref", "--format=%(upstream:short)", localBranchRef],
+        repoRoot,
+      )).stdout.trim();
+      if (upstream) {
+        return upstream;
+      }
+    } catch {
+      // Fall through to origin/<branch> probing.
+    }
+
+    const originCandidate = `origin/${trimmed}`;
+    if (await gitRefPathExists(repoRoot, `refs/remotes/${originCandidate}`)) {
+      return originCandidate;
+    }
+
+    return trimmed;
+  }
+
+  if (await gitCommitRefExists(repoRoot, trimmed)) {
+    return trimmed;
+  }
+
+  const originCandidate = `origin/${trimmed}`;
+  if (await gitRefPathExists(repoRoot, `refs/remotes/${originCandidate}`)) {
+    return originCandidate;
+  }
+
+  return trimmed;
+}
+
 async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<{
   git: ExecutionWorkspaceCloseGitReadiness | null;
   warnings: string[];
@@ -158,7 +234,9 @@ async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<
   let aheadCount: number | null = null;
   let behindCount: number | null = null;
   let isMergedIntoBase: boolean | null = null;
-  const baseRef = workspace.baseRef;
+  const baseRef = repoRoot
+    ? await resolveAuthoritativeCloseReadinessBaseRef(repoRoot, workspace.baseRef)
+    : workspace.baseRef;
 
   if (repoRoot && baseRef) {
     try {
