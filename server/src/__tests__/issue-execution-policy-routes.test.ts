@@ -1032,6 +1032,85 @@ describe("issue execution policy routes", () => {
     );
   });
 
+  it("supersedes checked-out legacy targetless manager closeout confirmations after review checkout moves the issue to in_progress", async () => {
+    const reviewerAgentId = "44444444-4444-4444-8444-444444444444";
+    const reviewSubjectAgentId = "33333333-3333-4333-8333-333333333333";
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "in_progress",
+      assigneeAgentId: reviewerAgentId,
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-1015A",
+      title: "Checked out legacy manager closeout",
+      executionPolicy: null,
+      executionState: null,
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+    mockIssueService.addComment.mockResolvedValue({
+      id: "comment-manager-closeout",
+      issueId: issue.id,
+      companyId: issue.companyId,
+      body: "Approved after merge.",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      authorAgentId: reviewerAgentId,
+      authorUserId: null,
+    });
+    mockIssueThreadInteractionService.listForIssue.mockResolvedValue([
+      {
+        id: "interaction-1",
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        createdByAgentId: reviewSubjectAgentId,
+        createdByUserId: null,
+        payload: {
+          version: 1,
+          prompt: "Approve after merge?",
+        },
+      },
+    ]);
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: reviewerAgentId,
+      companyId: "company-1",
+      runId: "run-manager-closeout-after-checkout-targetless",
+    }))
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "done", comment: "Approved after merge." });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.assertCheckoutOwner).toHaveBeenCalledWith(
+      issue.id,
+      reviewerAgentId,
+      "run-manager-closeout-after-checkout-targetless",
+    );
+    expect(mockIssueThreadInteractionService.supersedeManagedReviewCloseoutInteractions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: issue.id,
+        companyId: issue.companyId,
+        assigneeAgentId: reviewerAgentId,
+        reviewSubjectAgentId,
+      }),
+      expect.objectContaining({
+        interactionIds: ["interaction-1"],
+        commentId: "comment-manager-closeout",
+      }),
+      {
+        agentId: reviewerAgentId,
+        userId: null,
+      },
+    );
+  });
+
   it("does not let manager closeout bypass a board-authored pending request_confirmation interaction", async () => {
     const reviewerAgentId = "44444444-4444-4444-8444-444444444444";
     const issue = {

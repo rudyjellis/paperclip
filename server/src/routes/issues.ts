@@ -2231,6 +2231,7 @@ export function issueRoutes(
 
   function resolveCheckedOutManagedCloseoutReviewSubjectAgentId(input: {
     actorAgentId: string;
+    executionState: ParsedExecutionState | null;
     issue: {
       status: string;
       assigneeAgentId: string | null;
@@ -2243,15 +2244,33 @@ export function issueRoutes(
       return null;
     }
     if (input.pendingInteractions.length === 0) return null;
-    if (input.pendingInteractions.some((interaction) => !isManagerCloseoutReviewSurrogateInteraction(interaction))) {
-      return null;
+
+    const matchesReviewSubject = (reviewSubjectAgentId: string | null) => {
+      if (!reviewSubjectAgentId) return false;
+      return input.pendingInteractions.every((interaction) => isManagedReviewCloseoutSupersedableInteraction({
+        interaction,
+        reviewSubjectAgentId,
+      }));
+    };
+
+    const recordedReviewSubjectAgentId =
+      input.executionState?.returnAssignee?.type === "agent"
+        ? readNonEmptyString(input.executionState.returnAssignee.agentId)
+        : null;
+    if (
+      recordedReviewSubjectAgentId
+      && recordedReviewSubjectAgentId !== input.actorAgentId
+      && matchesReviewSubject(recordedReviewSubjectAgentId)
+    ) {
+      return recordedReviewSubjectAgentId;
     }
 
     const reviewSubjectAgentIds = [...new Set(
       input.pendingInteractions
-        .map((interaction) => interaction.createdByAgentId)
-        .filter((agentId): agentId is string => typeof agentId === "string" && agentId.length > 0 && agentId !== input.actorAgentId),
-    )];
+        .map((interaction) => readNonEmptyString(interaction.createdByAgentId))
+        .filter((agentId): agentId is string => !!agentId && agentId !== input.actorAgentId),
+    )].filter((reviewSubjectAgentId) => matchesReviewSubject(reviewSubjectAgentId));
+
     return reviewSubjectAgentIds.length === 1 ? reviewSubjectAgentIds[0] : null;
   }
 
@@ -2307,6 +2326,7 @@ export function issueRoutes(
 
     const reviewSubjectAgentId = resolveCheckedOutManagedCloseoutReviewSubjectAgentId({
       actorAgentId,
+      executionState,
       issue,
       pendingInteractions,
     });
