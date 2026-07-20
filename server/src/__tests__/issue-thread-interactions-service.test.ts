@@ -2018,7 +2018,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
         agentId: reviewerAgentId,
       },
     )).rejects.toThrow(
-      "Only eligible assignee-authored review confirmations can be superseded by manager closeout",
+      "Only eligible review confirmations can be superseded by manager closeout",
     );
 
     const row = await db
