@@ -78,6 +78,10 @@ async function readGit(cwd: string, args: string[]) {
   return (await execFileAsync("git", args, { cwd })).stdout.trim();
 }
 
+async function readBranchUpstream(cwd: string, branchName: string) {
+  return await readGit(cwd, ["for-each-ref", "--format=%(upstream:short)", `refs/heads/${branchName}`]);
+}
+
 async function runPnpm(cwd: string, args: string[]) {
   await execFileAsync("pnpm", args, { cwd });
 }
@@ -591,6 +595,34 @@ describe("realizeExecutionWorkspace", () => {
     expect(workspace.repoRef).toBe("origin/master");
     expect(workspace.baseRefSha).toBe(originHead);
     expect(await readGit(workspace.cwd, ["rev-parse", "HEAD"])).toBe(originHead);
+  });
+
+  it("clears inherited base-branch tracking from fresh task worktrees", async () => {
+    const { repoRoot } = await createClonedRepoWithRemote();
+
+    const workspace = await realizeWorktreeForTest(repoRoot, null);
+
+    await expect(readBranchUpstream(workspace.cwd, workspace.branchName!)).resolves.toBe("");
+  });
+
+  it("repairs stale tracking to the task branch remote when reusing a pushed worktree", async () => {
+    const { repoRoot } = await createClonedRepoWithRemote();
+
+    const initial = await realizeWorktreeForTest(repoRoot, null);
+    const branchName = initial.branchName!;
+    await fs.writeFile(path.join(initial.cwd, "feature.txt"), "hello\n", "utf8");
+    await runGit(initial.cwd, ["add", "feature.txt"]);
+    await runGit(initial.cwd, ["commit", "-m", "Feature commit"]);
+    await runGit(initial.cwd, ["push", "-u", "origin", branchName]);
+    await runGit(repoRoot, ["config", `branch.${branchName}.remote`, "origin"]);
+    await runGit(repoRoot, ["config", `branch.${branchName}.merge`, "refs/heads/master"]);
+    await expect(readBranchUpstream(initial.cwd, branchName)).resolves.toBe("origin/master");
+
+    const reused = await realizeWorktreeForTest(repoRoot, null);
+
+    expect(reused.created).toBe(false);
+    expect(reused.cwd).toBe(initial.cwd);
+    await expect(readBranchUpstream(reused.cwd, branchName)).resolves.toBe(`origin/${branchName}`);
   });
 
   it("fast-forwards an unstarted reused worktree to the advanced origin/master", async () => {
