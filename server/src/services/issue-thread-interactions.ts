@@ -151,12 +151,14 @@ export function isManagedReviewCloseoutSupersedableInteraction(args: {
   if (args.interaction.status !== "pending") return false;
   if (args.interaction.kind !== "request_confirmation") return false;
   if (args.interaction.createdByUserId) return false;
-  if (args.interaction.createdByAgentId !== args.reviewSubjectAgentId) return false;
   if (args.interaction.continuationPolicy === "none") return false;
-  return (
-    !args.interaction.payload.target
-    || isManagerCloseoutReviewSurrogateInteraction(args.interaction)
-  );
+  const isManagerCloseoutSurrogate = isManagerCloseoutReviewSurrogateInteraction(args.interaction);
+  if (isManagerCloseoutSurrogate) {
+    return typeof args.interaction.createdByAgentId === "string"
+      && args.interaction.createdByAgentId.length > 0;
+  }
+  if (args.interaction.createdByAgentId !== args.reviewSubjectAgentId) return false;
+  return !args.interaction.payload.target;
 }
 
 function isIssueThreadInteractionIdempotencyConflict(error: unknown): boolean {
