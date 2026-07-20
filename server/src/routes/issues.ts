@@ -105,7 +105,10 @@ import {
   resolveTaskWatchdogMutationScope,
   taskWatchdogScopeAllowsIssueMutation,
 } from "../services/task-watchdog-scope.js";
-import { isManagedReviewCloseoutSupersedableInteraction } from "../services/issue-thread-interactions.js";
+import {
+  isManagedReviewCloseoutSupersedableInteraction,
+  isManagerCloseoutReviewSurrogateInteraction,
+} from "../services/issue-thread-interactions.js";
 import type { TaskWatchdogServiceDeps, taskWatchdogService } from "../services/task-watchdogs.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized, unprocessable } from "../errors.js";
@@ -2222,7 +2225,54 @@ export function issueRoutes(
 
   type ManagedInReviewCloseoutPath = {
     supersedablePendingInteractionIds: string[];
+    reviewSubjectAgentId: string;
+    requiresManagedCloseoutScope: boolean;
   };
+
+  function resolveCheckedOutManagedCloseoutReviewSubjectAgentId(input: {
+    actorAgentId: string;
+    executionState: ParsedExecutionState | null;
+    issue: {
+      status: string;
+      assigneeAgentId: string | null;
+      assigneeUserId: string | null;
+    };
+    pendingInteractions: Awaited<ReturnType<typeof issueThreadInteractionsSvc.listForIssue>>;
+  }) {
+    if (input.issue.status !== "in_progress") return null;
+    if (!input.issue.assigneeAgentId || input.issue.assigneeAgentId !== input.actorAgentId || input.issue.assigneeUserId) {
+      return null;
+    }
+    if (input.pendingInteractions.length === 0) return null;
+
+    const matchesReviewSubject = (reviewSubjectAgentId: string | null) => {
+      if (!reviewSubjectAgentId) return false;
+      return input.pendingInteractions.every((interaction) => isManagedReviewCloseoutSupersedableInteraction({
+        interaction,
+        reviewSubjectAgentId,
+      }));
+    };
+
+    const recordedReviewSubjectAgentId =
+      input.executionState?.returnAssignee?.type === "agent"
+        ? readNonEmptyString(input.executionState.returnAssignee.agentId)
+        : null;
+    if (
+      recordedReviewSubjectAgentId
+      && recordedReviewSubjectAgentId !== input.actorAgentId
+      && matchesReviewSubject(recordedReviewSubjectAgentId)
+    ) {
+      return recordedReviewSubjectAgentId;
+    }
+
+    const reviewSubjectAgentIds = [...new Set(
+      input.pendingInteractions
+        .map((interaction) => readNonEmptyString(interaction.createdByAgentId))
+        .filter((agentId): agentId is string => !!agentId && agentId !== input.actorAgentId),
+    )].filter((reviewSubjectAgentId) => matchesReviewSubject(reviewSubjectAgentId));
+
+    return reviewSubjectAgentIds.length === 1 ? reviewSubjectAgentIds[0] : null;
+  }
 
   async function resolveManagedInReviewCloseoutPath(
     req: Request,
@@ -2238,27 +2288,60 @@ export function issueRoutes(
   ): Promise<ManagedInReviewCloseoutPath | null> {
     if (req.actor.type !== "agent") return null;
     const actorAgentId = req.actor.agentId;
-    if (!actorAgentId || issue.status !== "in_review") return null;
-    if (!issue.assigneeAgentId || issue.assigneeAgentId === actorAgentId || issue.assigneeUserId) return null;
-    if (!isManagedInReviewCloseoutPatch(body)) return null;
+    if (!actorAgentId || !isManagedInReviewCloseoutPatch(body)) return null;
+
+    const directManagedCloseout =
+      issue.status === "in_review"
+      && !!issue.assigneeAgentId
+      && issue.assigneeAgentId !== actorAgentId
+      && !issue.assigneeUserId;
+    const checkedOutManagedCloseout =
+      issue.status === "in_progress"
+      && issue.assigneeAgentId === actorAgentId
+      && !issue.assigneeUserId;
+    if (!directManagedCloseout && !checkedOutManagedCloseout) return null;
 
     const executionState = parseIssueExecutionState(issue.executionState);
     if (executionState?.currentParticipant) return null;
 
     const interactions = await issueThreadInteractionsSvc.listForIssue(issue.id);
     const pendingInteractions = interactions.filter((interaction) => interaction.status === "pending");
-    if (pendingInteractions.some((interaction) => !isManagedReviewCloseoutSupersedableInteraction({
-      interaction,
-      assigneeAgentId: issue.assigneeAgentId,
-    }))) {
-      return null;
-    }
 
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(issue.id);
     if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return null;
 
+    if (directManagedCloseout && issue.assigneeAgentId) {
+      if (pendingInteractions.some((interaction) => !isManagedReviewCloseoutSupersedableInteraction({
+        interaction,
+        reviewSubjectAgentId: issue.assigneeAgentId,
+      }))) {
+        return null;
+      }
+      return {
+        supersedablePendingInteractionIds: pendingInteractions.map((interaction) => interaction.id),
+        reviewSubjectAgentId: issue.assigneeAgentId,
+        requiresManagedCloseoutScope: true,
+      };
+    }
+
+    const reviewSubjectAgentId = resolveCheckedOutManagedCloseoutReviewSubjectAgentId({
+      actorAgentId,
+      executionState,
+      issue,
+      pendingInteractions,
+    });
+    if (!reviewSubjectAgentId) return null;
+    if (pendingInteractions.some((interaction) => !isManagedReviewCloseoutSupersedableInteraction({
+      interaction,
+      reviewSubjectAgentId,
+    }))) {
+      return null;
+    }
+
     return {
       supersedablePendingInteractionIds: pendingInteractions.map((interaction) => interaction.id),
+      reviewSubjectAgentId,
+      requiresManagedCloseoutScope: false,
     };
   }
 
@@ -6080,7 +6163,9 @@ export function issueRoutes(
       req,
       res,
       existing,
-      managedInReviewCloseoutPath ? { managedInReviewCloseout: true } : undefined,
+      managedInReviewCloseoutPath?.requiresManagedCloseoutScope
+        ? { managedInReviewCloseout: true }
+        : undefined,
     ))) return;
     if (!(await assertCheapRecoveryIssueAssigneeProfileAllowed(req, res, existing, req.body))) return;
 
@@ -6859,6 +6944,7 @@ export function issueRoutes(
                 id: issue.id,
                 companyId: issue.companyId,
                 assigneeAgentId: issue.assigneeAgentId,
+                reviewSubjectAgentId: managedInReviewCloseoutPath.reviewSubjectAgentId,
               },
               {
                 interactionIds: managedInReviewCloseoutPath.supersedablePendingInteractionIds,

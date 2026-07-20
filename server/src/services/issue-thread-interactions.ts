@@ -135,21 +135,30 @@ function isLegacyGithubPrManagerCloseoutReviewSurrogate(payload: RequestConfirma
   );
 }
 
+export function isManagerCloseoutReviewSurrogateInteraction(interaction: IssueThreadInteraction) {
+  if (interaction.kind !== "request_confirmation") return false;
+  return (
+    isExplicitManagerCloseoutEngineeringPrReviewSurrogate(interaction.payload)
+    || isLegacyGithubPrManagerCloseoutReviewSurrogate(interaction.payload)
+  );
+}
+
 export function isManagedReviewCloseoutSupersedableInteraction(args: {
   interaction: IssueThreadInteraction;
-  assigneeAgentId: string | null;
+  reviewSubjectAgentId: string | null;
 }) {
-  if (!args.assigneeAgentId) return false;
+  if (!args.reviewSubjectAgentId) return false;
   if (args.interaction.status !== "pending") return false;
   if (args.interaction.kind !== "request_confirmation") return false;
   if (args.interaction.createdByUserId) return false;
-  if (args.interaction.createdByAgentId !== args.assigneeAgentId) return false;
   if (args.interaction.continuationPolicy === "none") return false;
-  return (
-    !args.interaction.payload.target
-    || isExplicitManagerCloseoutEngineeringPrReviewSurrogate(args.interaction.payload)
-    || isLegacyGithubPrManagerCloseoutReviewSurrogate(args.interaction.payload)
-  );
+  const isManagerCloseoutSurrogate = isManagerCloseoutReviewSurrogateInteraction(args.interaction);
+  if (isManagerCloseoutSurrogate) {
+    return typeof args.interaction.createdByAgentId === "string"
+      && args.interaction.createdByAgentId.length > 0;
+  }
+  if (args.interaction.createdByAgentId !== args.reviewSubjectAgentId) return false;
+  return !args.interaction.payload.target;
 }
 
 function isIssueThreadInteractionIdempotencyConflict(error: unknown): boolean {
@@ -1614,7 +1623,12 @@ export function issueThreadInteractionService(db: Db) {
     },
 
     supersedeManagedReviewCloseoutInteractions: async (
-      issue: { id: string; companyId: string; assigneeAgentId: string | null },
+      issue: {
+        id: string;
+        companyId: string;
+        assigneeAgentId: string | null;
+        reviewSubjectAgentId?: string | null;
+      },
       input: {
         interactionIds: string[];
         commentId: string;
@@ -1640,19 +1654,20 @@ export function issueThreadInteractionService(db: Db) {
         );
       }
 
+      const reviewSubjectAgentId = issue.reviewSubjectAgentId ?? issue.assigneeAgentId;
       const invalidRows = rows.filter((row) => {
         const interaction = hydrateInteraction(row);
         return (
           row.status === "pending"
           && !isManagedReviewCloseoutSupersedableInteraction({
             interaction,
-            assigneeAgentId: issue.assigneeAgentId,
+            reviewSubjectAgentId,
           })
         );
       });
       if (invalidRows.length > 0) {
         throw unprocessable(
-          "Only eligible assignee-authored review confirmations can be superseded by manager closeout",
+          "Only eligible review confirmations can be superseded by manager closeout",
         );
       }
 
