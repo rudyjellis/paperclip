@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Approval, ApprovalComment, Issue } from "@paperclipai/shared";
-import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from "react";
+import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,11 +21,11 @@ const mockApprovalsApi = vi.hoisted(() => ({
 
 const mockAgentsApi = vi.hoisted(() => ({
   list: vi.fn(),
-  remove: vi.fn(),
 }));
 
-const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockNavigate = vi.hoisted(() => vi.fn());
+const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
+const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 const mockReviewedAssetsPanelRender = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/approvals", () => ({
@@ -38,25 +37,18 @@ vi.mock("../api/agents", () => ({
 }));
 
 vi.mock("@/lib/router", () => ({
-  Link: ({
-    children,
-    to,
-    ...props
-  }: {
-    children?: ReactNode;
-    to: string;
-  } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
+  Link: ({ children, to, ...props }: { children?: ReactNode; to: string } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={to} {...props}>{children}</a>
   ),
   useNavigate: () => mockNavigate,
   useParams: () => ({ approvalId: "approval-1" }),
-  useSearchParams: () => [new URLSearchParams()],
+  useSearchParams: () => [new URLSearchParams("")],
 }));
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    setSelectedCompanyId: vi.fn(),
+    setSelectedCompanyId: mockSetSelectedCompanyId,
   }),
 }));
 
@@ -75,40 +67,55 @@ vi.mock("../components/Identity", () => ({
 }));
 
 vi.mock("../components/ApprovalPayload", () => ({
-  approvalLabel: () => "Approval",
+  approvalLabel: () => "Approval request",
   typeIcon: {},
   defaultTypeIcon: () => <span>icon</span>,
-  ApprovalPayloadRenderer: () => <div data-testid="approval-payload">Payload</div>,
+  ApprovalPayloadRenderer: () => <div>Payload</div>,
 }));
 
 vi.mock("../components/PageSkeleton", () => ({
   PageSkeleton: () => <div>Loading</div>,
 }));
 
-vi.mock("../components/ReviewedAssetsPanel", () => ({
-  ReviewedAssetsPanel: (props: unknown) => {
-    mockReviewedAssetsPanelRender(props);
-    return <div data-testid="reviewed-assets-panel">Reviewed assets</div>;
-  },
-}));
-
 vi.mock("../components/MarkdownBody", () => ({
   MarkdownBody: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("../components/ReviewedAssetsPanel", () => ({
+  ReviewedAssetsPanel: (props: { error?: unknown; isLoading?: boolean; issuePathId?: string | null }) => {
+    mockReviewedAssetsPanelRender(props);
+    return (
+      <div
+        data-testid="reviewed-assets-panel"
+        data-state={props.isLoading ? "loading" : props.error ? "error" : "ready"}
+        data-issue-path-id={props.issuePathId ?? ""}
+      >
+        Reviewed assets
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/ui/button", () => ({
   Button: ({
     children,
+    disabled,
+    onClick,
     type = "button",
     ...props
   }: ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button type={type} {...props}>{children}</button>
+    <button {...props} type={type} disabled={disabled} onClick={onClick}>
+      {children}
+    </button>
   ),
 }));
 
 vi.mock("@/components/ui/textarea", () => ({
-  Textarea: (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => <textarea {...props} />,
+  Textarea: (props: TextareaHTMLAttributes<HTMLTextAreaElement>) => <textarea {...props} />,
 }));
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 async function act(callback: () => void | Promise<void>) {
   let result: void | Promise<void> = undefined;
@@ -139,87 +146,6 @@ async function waitForAssertion(assertion: () => void, attempts = 20) {
   throw lastError;
 }
 
-function createApproval(overrides: Partial<Approval> = {}): Approval {
-  return {
-    id: "approval-1",
-    companyId: "company-1",
-    type: "request_board_approval",
-    requestedByAgentId: "agent-1",
-    requestedByUserId: null,
-    status: "pending",
-    payload: {},
-    decisionNote: null,
-    decidedByUserId: null,
-    decidedAt: null,
-    createdAt: new Date("2026-07-22T00:00:00.000Z"),
-    updatedAt: new Date("2026-07-22T00:00:00.000Z"),
-    ...overrides,
-  };
-}
-
-function createLinkedIssue(overrides: Partial<Issue> = {}): Issue {
-  return {
-    id: "issue-1",
-    companyId: "company-1",
-    projectId: null,
-    projectWorkspaceId: null,
-    goalId: null,
-    parentId: null,
-    title: "Reviewed issue",
-    description: null,
-    status: "in_review",
-    priority: "medium",
-    assigneeAgentId: null,
-    assigneeUserId: null,
-    checkoutRunId: null,
-    executionRunId: null,
-    executionAgentNameKey: null,
-    executionLockedAt: null,
-    executionWorkspaceId: null,
-    executionWorkspacePreference: null,
-    executionWorkspaceSettings: null,
-    currentExecutionWorkspace: null,
-    createdByAgentId: null,
-    createdByUserId: null,
-    identifier: "PAP-1",
-    issueNumber: 1,
-    originKind: "manual",
-    originId: null,
-    originRunId: null,
-    originFingerprint: "default",
-    requestDepth: 0,
-    billingCode: null,
-    assigneeAdapterOverrides: null,
-    executionPolicy: null,
-    executionState: null,
-    startedAt: null,
-    completedAt: null,
-    cancelledAt: null,
-    hiddenAt: null,
-    createdAt: new Date("2026-07-22T00:00:00.000Z"),
-    updatedAt: new Date("2026-07-22T00:00:00.000Z"),
-    labels: [],
-    labelIds: [],
-    ancestors: [],
-    documentSummaries: [],
-    ...overrides,
-  } as Issue;
-}
-
-function createComment(overrides: Partial<ApprovalComment> = {}): ApprovalComment {
-  return {
-    id: "comment-1",
-    companyId: "company-1",
-    approvalId: "approval-1",
-    authorAgentId: "agent-1",
-    authorUserId: null,
-    body: "Looks good",
-    createdAt: new Date("2026-07-22T00:00:00.000Z"),
-    updatedAt: new Date("2026-07-22T00:00:00.000Z"),
-    ...overrides,
-  };
-}
-
 describe("ApprovalDetail", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -236,15 +162,26 @@ describe("ApprovalDetail", () => {
       },
     });
 
-    mockApprovalsApi.get.mockResolvedValue(createApproval());
-    mockApprovalsApi.listComments.mockResolvedValue([createComment()]);
-    mockApprovalsApi.listIssues.mockResolvedValue([createLinkedIssue()]);
-    mockApprovalsApi.getReviewedArtifacts.mockResolvedValue({
-      contextType: "approval_review",
-      artifacts: [],
-      errors: [],
+    mockApprovalsApi.get.mockResolvedValue({
+      id: "approval-1",
+      companyId: "company-1",
+      status: "pending",
+      type: "request_board_approval",
+      payload: { title: "Approval request" },
+      requestedByAgentId: "agent-1",
+      decisionNote: null,
     });
-    mockAgentsApi.list.mockResolvedValue([{ id: "agent-1", name: "Reviewer" }]);
+    mockApprovalsApi.listComments.mockResolvedValue([]);
+    mockApprovalsApi.listIssues.mockResolvedValue([
+      { id: "issue-1", identifier: "PAP-1", title: "Review assets task" },
+    ]);
+    mockApprovalsApi.getReviewedArtifacts.mockRejectedValue(new Error("Reviewed assets failed"));
+    mockApprovalsApi.approve.mockResolvedValue({});
+    mockApprovalsApi.reject.mockResolvedValue({});
+    mockApprovalsApi.requestRevision.mockResolvedValue({});
+    mockApprovalsApi.resubmit.mockResolvedValue({});
+    mockApprovalsApi.addComment.mockResolvedValue({});
+    mockAgentsApi.list.mockResolvedValue([{ id: "agent-1", name: "CodexCoder" }]);
     mockReviewedAssetsPanelRender.mockClear();
   });
 
@@ -254,10 +191,11 @@ describe("ApprovalDetail", () => {
     });
     queryClient.clear();
     container.remove();
-    vi.clearAllMocks();
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
   });
 
-  it("loads reviewed assets for actionable approvals and renders the panel", async () => {
+  it("places reviewed assets before decision controls and keeps approve actions usable on asset failure", async () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -269,15 +207,26 @@ describe("ApprovalDetail", () => {
     await flushReact();
 
     await waitForAssertion(() => {
-      expect(mockApprovalsApi.getReviewedArtifacts).toHaveBeenCalledWith("approval-1");
-      expect(container.querySelector('[data-testid="reviewed-assets-panel"]')).not.toBeNull();
-      expect(mockReviewedAssetsPanelRender).toHaveBeenCalledWith(
-        expect.objectContaining({
-          issuePathId: "PAP-1",
-          companyId: "company-1",
-          isLoading: false,
-        }),
+      const panel = container.querySelector('[data-testid="reviewed-assets-panel"]');
+      const approveButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Approve"),
       );
+      expect(panel).toBeTruthy();
+      expect(panel?.getAttribute("data-state")).toBe("error");
+      expect(panel?.getAttribute("data-issue-path-id")).toBe("PAP-1");
+      expect(approveButton).toBeTruthy();
+      expect(Boolean(panel?.compareDocumentPosition(approveButton!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+      expect(container.textContent).toContain("Reject");
+      expect(container.textContent).toContain("Request revision");
     });
+
+    const approveButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Approve"),
+    );
+    await act(async () => {
+      approveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(mockApprovalsApi.approve).toHaveBeenCalledWith("approval-1");
   });
 });

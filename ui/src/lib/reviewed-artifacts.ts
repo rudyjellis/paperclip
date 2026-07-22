@@ -206,6 +206,10 @@ export function hasPendingLinkedApproval(approvals: Approval[] | undefined | nul
   );
 }
 
+function hasBoardReviewWorkProducts(issue: Issue) {
+  return (issue.workProducts ?? []).some((workProduct) => workProduct.reviewState === "needs_board_review");
+}
+
 export function shouldShowReviewedAssetsPanel({
   issue,
   linkedApprovals,
@@ -216,16 +220,10 @@ export function shouldShowReviewedAssetsPanel({
   response?: ReviewedArtifactsWireResponse | null;
 }) {
   const model = mapReviewedArtifactsResponse(response);
-  return issue.status === "in_review" || hasPendingLinkedApproval(linkedApprovals) || model.items.length > 0;
-}
-
-export function shouldShowApprovalReviewedAssetsPanel({
-  approval,
-  response,
-}: {
-  approval: Pick<Approval, "status">;
-  response?: ReviewedArtifactsWireResponse | null;
-}) {
-  const model = mapReviewedArtifactsResponse(response);
-  return approval.status === "pending" || approval.status === "revision_requested" || model.items.length > 0;
+  return (
+    issue.status === "in_review" ||
+    hasPendingLinkedApproval(linkedApprovals) ||
+    hasBoardReviewWorkProducts(issue) ||
+    model.items.length > 0
+  );
 }

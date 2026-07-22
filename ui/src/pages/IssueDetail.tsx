@@ -73,7 +73,6 @@ import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff
 import { IssueAttachmentsSection } from "../components/IssueAttachmentsSection";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuePlanDecompositionsSection } from "../components/IssuePlanDecompositionsSection";
-import { ReviewedAssetsPanel } from "../components/ReviewedAssetsPanel";
 import { IssueOutputSection } from "../components/issue-output/IssueOutputSection";
 import { isImageAttachment, isVideoAttachment } from "../lib/issue-attachments";
 import {
@@ -92,6 +91,7 @@ import { IssueRelatedWorkPanel } from "../components/IssueRelatedWorkPanel";
 import { IssueMonitorActivityCard } from "../components/IssueMonitorActivityCard";
 import { IssueScheduledRetryCard } from "../components/IssueScheduledRetryCard";
 import { IssueProperties } from "../components/IssueProperties";
+import { ReviewedAssetsPanel } from "../components/ReviewedAssetsPanel";
 import { PauseAffectsSummaryView } from "../components/interrupt-handoff/InterruptHandoffViews";
 import { computePauseAffectsSummary } from "../lib/interrupt-handoff";
 import { useIssueExternalObjects } from "../hooks/useIssueExternalObjects";
@@ -170,6 +170,7 @@ import {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
+  type Approval,
   type AskUserQuestionsAnswer,
   type AskUserQuestionsInteraction,
   type ActivityEvent,
@@ -1185,6 +1186,7 @@ type IssueDetailActivityTabProps = {
   companyId: string;
   issueStatus: Issue["status"];
   childIssues: Issue[];
+  linkedApprovals: Approval[];
   agentMap: Map<string, Agent>;
   hasLiveRuns: boolean;
   currentUserId: string | null;
@@ -1203,6 +1205,7 @@ function IssueDetailActivityTab({
   companyId,
   issueStatus,
   childIssues,
+  linkedApprovals,
   agentMap,
   hasLiveRuns,
   currentUserId,
@@ -1223,11 +1226,6 @@ function IssueDetailActivityTab({
     queryKey: queryKeys.issues.runs(issueId),
     queryFn: () => activityApi.runsForIssue(issueId),
     placeholderData: keepPreviousDataForSameQueryTail<RunForIssue[]>(issueId),
-  });
-  const { data: linkedApprovals } = useQuery({
-    queryKey: queryKeys.issues.approvals(issueId),
-    queryFn: () => issuesApi.listApprovals(issueId),
-    placeholderData: keepPreviousDataForSameQueryTail<Awaited<ReturnType<typeof issuesApi.listApprovals>>>(issueId),
   });
   const { data: continuationHandoff } = useQuery({
     queryKey: queryKeys.issues.document(issueId, ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY),
@@ -1573,7 +1571,7 @@ export function IssueDetail() {
     enabled: !!issueId,
     placeholderData: keepPreviousDataForSameQueryTail<IssueWorkProduct[]>(issueId ?? "pending"),
   });
-  const { data: linkedApprovals } = useQuery({
+  const { data: linkedApprovals = [] } = useQuery({
     queryKey: queryKeys.issues.approvals(issueId!),
     queryFn: () => issuesApi.listApprovals(issueId!),
     enabled: !!issueId,
@@ -1587,7 +1585,6 @@ export function IssueDetail() {
     queryKey: queryKeys.issues.reviewedArtifacts(issueId!),
     queryFn: () => issuesApi.getReviewedArtifacts(issueId!),
     enabled: !!issueId,
-    placeholderData: keepPreviousDataForSameQueryTail<Awaited<ReturnType<typeof issuesApi.getReviewedArtifacts>>>(issueId ?? "pending"),
   });
 
   const { data: liveRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>({
@@ -1609,8 +1606,16 @@ export function IssueDetail() {
   });
   const resolvedHasActiveRun = issue ? shouldTrackIssueActiveRun(issue) && hasActiveRun : hasActiveRun;
   const hasLiveRuns = liveRunCount > 0 || resolvedHasActiveRun;
-  const showReviewedAssets = issue
-    ? shouldShowReviewedAssetsPanel({ issue, linkedApprovals, response: reviewedArtifacts })
+  const issueReviewedAssetsContext = useMemo(
+    () => issue ? { ...issue, workProducts: workProducts ?? issue.workProducts ?? [] } : null,
+    [issue, workProducts],
+  );
+  const showReviewedAssets = issueReviewedAssetsContext
+    ? shouldShowReviewedAssetsPanel({
+        issue: issueReviewedAssetsContext,
+        linkedApprovals,
+        response: reviewedArtifacts,
+      })
     : false;
   useEffect(() => {
     if (!hasLiveRuns && locallyQueuedCommentRunIds.size > 0) {
@@ -2332,6 +2337,7 @@ export function IssueDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.reviewedArtifacts(issueId!) });
       invalidateIssueCollections();
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.detail(variables.approvalId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.approvals.reviewedArtifacts(variables.approvalId) });
       if (resolvedCompanyId) {
         queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(resolvedCompanyId) });
       }
@@ -4211,6 +4217,16 @@ export function IssueDetail() {
         />
       </div>
 
+      {showReviewedAssets ? (
+        <ReviewedAssetsPanel
+          response={reviewedArtifacts}
+          isLoading={reviewedArtifactsLoading}
+          error={reviewedArtifactsError}
+          issuePathId={issue.identifier ?? issue.id}
+          companyId={issue.companyId}
+        />
+      ) : null}
+
       <PluginSlotOutlet
         slotTypes={["toolbarButton", "contextMenuItem"]}
         entityType="issue"
@@ -4322,16 +4338,6 @@ export function IssueDetail() {
         agentMap={agentMap}
         userProfileMap={userProfileMap}
       />
-
-      {showReviewedAssets ? (
-        <ReviewedAssetsPanel
-          response={reviewedArtifacts}
-          isLoading={reviewedArtifactsLoading}
-          error={reviewedArtifactsError}
-          issuePathId={issue.identifier ?? issue.id}
-          companyId={issue.companyId}
-        />
-      ) : null}
 
       <IssueOutputSection
         workProducts={workProducts}
@@ -4531,6 +4537,7 @@ export function IssueDetail() {
               companyId={issue.companyId}
               issueStatus={issue.status}
               childIssues={childIssues}
+              linkedApprovals={linkedApprovals}
               agentMap={agentMap}
               hasLiveRuns={hasLiveRuns}
               currentUserId={currentUserId}

@@ -160,7 +160,7 @@ describe("reviewed artifact mapper", () => {
     ]);
   });
 
-  it("shows the panel for review context, pending approvals, or mapped assets", () => {
+  it("shows the panel for review context, pending approvals, board-review work products, or mapped assets", () => {
     expect(
       shouldShowReviewedAssetsPanel({
         issue: createIssue({ status: "in_review" }),
@@ -172,6 +172,16 @@ describe("reviewed artifact mapper", () => {
       shouldShowReviewedAssetsPanel({
         issue: createIssue({ status: "todo" }),
         linkedApprovals: [createApproval("pending")],
+        response: { artifacts: [] },
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowReviewedAssetsPanel({
+        issue: createIssue({
+          status: "todo",
+          workProducts: [createWorkProduct({ reviewState: "needs_board_review" })],
+        }),
+        linkedApprovals: [],
         response: { artifacts: [] },
       }),
     ).toBe(true);

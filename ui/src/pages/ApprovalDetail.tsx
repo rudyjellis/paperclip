@@ -6,7 +6,6 @@ import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
-import { shouldShowApprovalReviewedAssetsPanel } from "../lib/reviewed-artifacts";
 import { StatusBadge } from "../components/StatusBadge";
 import { Identity } from "../components/Identity";
 import { approvalLabel, typeIcon, defaultTypeIcon, ApprovalPayloadRenderer } from "../components/ApprovalPayload";
@@ -163,10 +162,6 @@ export function ApprovalDetail() {
   const TypeIcon = typeIcon[approval.type] ?? defaultTypeIcon;
   const showApprovedBanner = searchParams.get("resolved") === "approved" && approval.status === "approved";
   const primaryLinkedIssue = linkedIssues?.[0] ?? null;
-  const showReviewedAssetsPanel = shouldShowApprovalReviewedAssetsPanel({
-    approval,
-    response: reviewedArtifacts,
-  });
   const resolvedCta =
     primaryLinkedIssue
       ? {
@@ -276,6 +271,13 @@ export function ApprovalDetail() {
             </p>
           </div>
         )}
+        <ReviewedAssetsPanel
+          response={reviewedArtifacts}
+          isLoading={reviewedArtifactsLoading}
+          error={reviewedArtifactsError}
+          issuePathId={primaryLinkedIssue?.identifier ?? primaryLinkedIssue?.id ?? null}
+          companyId={resolvedCompanyId ?? approval.companyId}
+        />
         <div className="flex flex-wrap items-center gap-2">
           {isActionable && !isBudgetApproval && (
             <>
@@ -338,16 +340,6 @@ export function ApprovalDetail() {
           )}
         </div>
       </div>
-
-      {showReviewedAssetsPanel ? (
-        <ReviewedAssetsPanel
-          response={reviewedArtifacts}
-          isLoading={reviewedArtifactsLoading}
-          error={reviewedArtifactsError}
-          issuePathId={primaryLinkedIssue?.identifier ?? primaryLinkedIssue?.id ?? null}
-          companyId={resolvedCompanyId ?? approval.companyId}
-        />
-      ) : null}
 
       <div className="border border-border rounded-lg p-4 space-y-3">
         <h3 className="text-sm font-medium">Comments ({comments?.length ?? 0})</h3>

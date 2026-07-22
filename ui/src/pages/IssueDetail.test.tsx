@@ -20,12 +20,9 @@ const mockIssuesApi = vi.hoisted(() => ({
   listApprovals: vi.fn(),
   listAcceptedPlanDecompositions: vi.fn(),
   listComments: vi.fn(),
-  listInteractions: vi.fn(),
   listAttachments: vi.fn(),
   listWorkProducts: vi.fn(),
   getReviewedArtifacts: vi.fn(),
-  getDocument: vi.fn(),
-  getCostSummary: vi.fn(),
   listFeedbackVotes: vi.fn(),
   markRead: vi.fn(),
   update: vi.fn(),
@@ -272,14 +269,7 @@ vi.mock("../components/IssueChatThread", () => ({
 }));
 
 vi.mock("../components/IssueDocumentsSection", () => ({
-  IssueDocumentsSection: () => <div>Documents</div>,
-}));
-
-vi.mock("../components/ReviewedAssetsPanel", () => ({
-  ReviewedAssetsPanel: (props: unknown) => {
-    mockReviewedAssetsPanelRender(props);
-    return <div data-testid="reviewed-assets-panel">Reviewed assets</div>;
-  },
+  IssueDocumentsSection: () => <div data-testid="issue-documents-section">Documents</div>,
 }));
 
 vi.mock("../components/MarkdownBody", () => ({
@@ -312,6 +302,21 @@ vi.mock("../components/IssueWorkspaceCard", () => ({
   IssueWorkspaceCard: (props: { onBrowseFiles?: () => void; onOpenFileByPath?: () => void }) => {
     mockIssueWorkspaceCardRender(props);
     return <div>Workspace</div>;
+  },
+}));
+
+vi.mock("../components/ReviewedAssetsPanel", () => ({
+  ReviewedAssetsPanel: (props: { isLoading?: boolean; error?: unknown; issuePathId?: string | null }) => {
+    mockReviewedAssetsPanelRender(props);
+    return (
+      <div
+        data-testid="reviewed-assets-panel"
+        data-state={props.isLoading ? "loading" : props.error ? "error" : "ready"}
+        data-issue-path-id={props.issuePathId ?? ""}
+      >
+        Reviewed assets
+      </div>
+    );
   },
 }));
 
@@ -954,23 +959,9 @@ describe("IssueDetail", () => {
     mockIssuesApi.list.mockResolvedValue([]);
     mockIssuesApi.listApprovals.mockResolvedValue([]);
     mockIssuesApi.listComments.mockResolvedValue([]);
-    mockIssuesApi.listInteractions.mockResolvedValue([]);
     mockIssuesApi.listAttachments.mockResolvedValue([]);
     mockIssuesApi.listWorkProducts.mockResolvedValue([]);
-    mockIssuesApi.getReviewedArtifacts.mockResolvedValue({
-      contextType: "issue_review",
-      artifacts: [],
-      errors: [],
-    });
-    mockIssuesApi.getDocument.mockRejectedValue(new Error("document not found"));
-    mockIssuesApi.getCostSummary.mockResolvedValue({
-      issueCount: 1,
-      costCents: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedInputTokens: 0,
-      runtimeMs: 0,
-    });
+    mockIssuesApi.getReviewedArtifacts.mockResolvedValue({ artifacts: [], errors: [] });
     mockIssuesApi.listFeedbackVotes.mockResolvedValue([]);
     mockIssuesApi.markRead.mockResolvedValue({ id: "issue-1", lastReadAt: new Date().toISOString() });
     mockIssuesApi.getTreeControlState.mockResolvedValue({ activePauseHold: null });
@@ -1043,6 +1034,29 @@ describe("IssueDetail", () => {
     ).toBe(false);
   });
 
+  it("places reviewed assets near the top of issue detail during review", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({ status: "in_review" }));
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    await waitForAssertion(() => {
+      const panel = container.querySelector('[data-testid="reviewed-assets-panel"]');
+      const documents = container.querySelector('[data-testid="issue-documents-section"]');
+      expect(panel).toBeTruthy();
+      expect(documents).toBeTruthy();
+      expect(panel?.getAttribute("data-issue-path-id")).toBe("PAP-1");
+      expect(Boolean(panel?.compareDocumentPosition(documents!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    });
+  });
+
   it("shows assignee and originating avatars in the issue header metadata", async () => {
     mockIssuesApi.get.mockResolvedValue(createIssue({
       assigneeAgentId: "agent-1",
@@ -1112,32 +1126,6 @@ describe("IssueDetail", () => {
       const tooltip = document.body.querySelector('[data-testid="issue-originating-tooltip"]');
       expect(tooltip?.textContent).toContain("Originating");
       expect(tooltip?.textContent).toContain("Dotta");
-    });
-  });
-
-  it("loads reviewed assets for in-review issues and renders the panel in the page body", async () => {
-    mockIssuesApi.get.mockResolvedValue(createIssue({ status: "in_review" }));
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <IssueDetail />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-    await flushReact();
-
-    await waitForAssertion(() => {
-      expect(mockIssuesApi.getReviewedArtifacts).toHaveBeenCalledWith("PAP-1");
-      expect(container.querySelector('[data-testid="reviewed-assets-panel"]')).not.toBeNull();
-      expect(mockReviewedAssetsPanelRender).toHaveBeenCalledWith(
-        expect.objectContaining({
-          issuePathId: "PAP-1",
-          companyId: "company-1",
-          isLoading: false,
-        }),
-      );
     });
   });
 
