@@ -73,6 +73,7 @@ import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff
 import { IssueAttachmentsSection } from "../components/IssueAttachmentsSection";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuePlanDecompositionsSection } from "../components/IssuePlanDecompositionsSection";
+import { ReviewedAssetsPanel } from "../components/ReviewedAssetsPanel";
 import { IssueOutputSection } from "../components/issue-output/IssueOutputSection";
 import { isImageAttachment, isVideoAttachment } from "../lib/issue-attachments";
 import {
@@ -81,6 +82,7 @@ import {
   isImageContentType,
   isVideoLikeOutput,
 } from "../lib/issue-output";
+import { shouldShowReviewedAssetsPanel } from "../lib/reviewed-artifacts";
 import { IssueSiblingNavigation } from "../components/IssueSiblingNavigation";
 import type { MarkdownExternalReferenceMap } from "../components/MarkdownBody";
 import { IssuesList } from "../components/IssuesList";
@@ -1571,6 +1573,22 @@ export function IssueDetail() {
     enabled: !!issueId,
     placeholderData: keepPreviousDataForSameQueryTail<IssueWorkProduct[]>(issueId ?? "pending"),
   });
+  const { data: linkedApprovals } = useQuery({
+    queryKey: queryKeys.issues.approvals(issueId!),
+    queryFn: () => issuesApi.listApprovals(issueId!),
+    enabled: !!issueId,
+    placeholderData: keepPreviousDataForSameQueryTail<Awaited<ReturnType<typeof issuesApi.listApprovals>>>(issueId ?? "pending"),
+  });
+  const {
+    data: reviewedArtifacts,
+    isLoading: reviewedArtifactsLoading,
+    error: reviewedArtifactsError,
+  } = useQuery({
+    queryKey: queryKeys.issues.reviewedArtifacts(issueId!),
+    queryFn: () => issuesApi.getReviewedArtifacts(issueId!),
+    enabled: !!issueId,
+    placeholderData: keepPreviousDataForSameQueryTail<Awaited<ReturnType<typeof issuesApi.getReviewedArtifacts>>>(issueId ?? "pending"),
+  });
 
   const { data: liveRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>({
     queryKey: queryKeys.issues.liveRuns(issueId!),
@@ -1591,6 +1609,9 @@ export function IssueDetail() {
   });
   const resolvedHasActiveRun = issue ? shouldTrackIssueActiveRun(issue) && hasActiveRun : hasActiveRun;
   const hasLiveRuns = liveRunCount > 0 || resolvedHasActiveRun;
+  const showReviewedAssets = issue
+    ? shouldShowReviewedAssetsPanel({ issue, linkedApprovals, response: reviewedArtifacts })
+    : false;
   useEffect(() => {
     if (!hasLiveRuns && locallyQueuedCommentRunIds.size > 0) {
       setLocallyQueuedCommentRunIds(new Map());
@@ -2308,6 +2329,7 @@ export function IssueDetail() {
     onSuccess: (_approval, variables) => {
       invalidateIssueDetail();
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.approvals(issueId!) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.reviewedArtifacts(issueId!) });
       invalidateIssueCollections();
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.detail(variables.approvalId) });
       if (resolvedCompanyId) {
@@ -4300,6 +4322,16 @@ export function IssueDetail() {
         agentMap={agentMap}
         userProfileMap={userProfileMap}
       />
+
+      {showReviewedAssets ? (
+        <ReviewedAssetsPanel
+          response={reviewedArtifacts}
+          isLoading={reviewedArtifactsLoading}
+          error={reviewedArtifactsError}
+          issuePathId={issue.identifier ?? issue.id}
+          companyId={issue.companyId}
+        />
+      ) : null}
 
       <IssueOutputSection
         workProducts={workProducts}

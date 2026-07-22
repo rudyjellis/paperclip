@@ -6,10 +6,12 @@ import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
+import { shouldShowApprovalReviewedAssetsPanel } from "../lib/reviewed-artifacts";
 import { StatusBadge } from "../components/StatusBadge";
 import { Identity } from "../components/Identity";
 import { approvalLabel, typeIcon, defaultTypeIcon, ApprovalPayloadRenderer } from "../components/ApprovalPayload";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { ReviewedAssetsPanel } from "../components/ReviewedAssetsPanel";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2, ChevronRight, Sparkles } from "lucide-react";
@@ -45,6 +47,15 @@ export function ApprovalDetail() {
     queryFn: () => approvalsApi.listIssues(approvalId!),
     enabled: !!approvalId,
   });
+  const {
+    data: reviewedArtifacts,
+    isLoading: reviewedArtifactsLoading,
+    error: reviewedArtifactsError,
+  } = useQuery({
+    queryKey: queryKeys.approvals.reviewedArtifacts(approvalId!),
+    queryFn: () => approvalsApi.getReviewedArtifacts(approvalId!),
+    enabled: !!approvalId,
+  });
 
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(resolvedCompanyId ?? ""),
@@ -75,6 +86,7 @@ export function ApprovalDetail() {
     queryClient.invalidateQueries({ queryKey: queryKeys.approvals.detail(approvalId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.approvals.comments(approvalId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.approvals.issues(approvalId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals.reviewedArtifacts(approvalId) });
     if (approval?.companyId) {
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(approval.companyId) });
       queryClient.invalidateQueries({
@@ -151,6 +163,10 @@ export function ApprovalDetail() {
   const TypeIcon = typeIcon[approval.type] ?? defaultTypeIcon;
   const showApprovedBanner = searchParams.get("resolved") === "approved" && approval.status === "approved";
   const primaryLinkedIssue = linkedIssues?.[0] ?? null;
+  const showReviewedAssetsPanel = shouldShowApprovalReviewedAssetsPanel({
+    approval,
+    response: reviewedArtifacts,
+  });
   const resolvedCta =
     primaryLinkedIssue
       ? {
@@ -322,6 +338,16 @@ export function ApprovalDetail() {
           )}
         </div>
       </div>
+
+      {showReviewedAssetsPanel ? (
+        <ReviewedAssetsPanel
+          response={reviewedArtifacts}
+          isLoading={reviewedArtifactsLoading}
+          error={reviewedArtifactsError}
+          issuePathId={primaryLinkedIssue?.identifier ?? primaryLinkedIssue?.id ?? null}
+          companyId={resolvedCompanyId ?? approval.companyId}
+        />
+      ) : null}
 
       <div className="border border-border rounded-lg p-4 space-y-3">
         <h3 className="text-sm font-medium">Comments ({comments?.length ?? 0})</h3>

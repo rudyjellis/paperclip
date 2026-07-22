@@ -17,10 +17,15 @@ import { queryKeys } from "../lib/queryKeys";
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
   list: vi.fn(),
+  listApprovals: vi.fn(),
   listAcceptedPlanDecompositions: vi.fn(),
   listComments: vi.fn(),
+  listInteractions: vi.fn(),
   listAttachments: vi.fn(),
   listWorkProducts: vi.fn(),
+  getReviewedArtifacts: vi.fn(),
+  getDocument: vi.fn(),
+  getCostSummary: vi.fn(),
   listFeedbackVotes: vi.fn(),
   markRead: vi.fn(),
   update: vi.fn(),
@@ -81,6 +86,7 @@ const mockIssuesListRender = vi.hoisted(() => vi.fn());
 const mockIssueChatThreadRender = vi.hoisted(() => vi.fn());
 const mockImageGalleryRender = vi.hoisted(() => vi.fn());
 const mockIssueWorkspaceCardRender = vi.hoisted(() => vi.fn());
+const mockReviewedAssetsPanelRender = vi.hoisted(() => vi.fn());
 
 class ResizeObserverStub {
   observe() {}
@@ -267,6 +273,13 @@ vi.mock("../components/IssueChatThread", () => ({
 
 vi.mock("../components/IssueDocumentsSection", () => ({
   IssueDocumentsSection: () => <div>Documents</div>,
+}));
+
+vi.mock("../components/ReviewedAssetsPanel", () => ({
+  ReviewedAssetsPanel: (props: unknown) => {
+    mockReviewedAssetsPanelRender(props);
+    return <div data-testid="reviewed-assets-panel">Reviewed assets</div>;
+  },
 }));
 
 vi.mock("../components/MarkdownBody", () => ({
@@ -939,9 +952,25 @@ describe("IssueDetail", () => {
     } as Response);
 
     mockIssuesApi.list.mockResolvedValue([]);
+    mockIssuesApi.listApprovals.mockResolvedValue([]);
     mockIssuesApi.listComments.mockResolvedValue([]);
+    mockIssuesApi.listInteractions.mockResolvedValue([]);
     mockIssuesApi.listAttachments.mockResolvedValue([]);
     mockIssuesApi.listWorkProducts.mockResolvedValue([]);
+    mockIssuesApi.getReviewedArtifacts.mockResolvedValue({
+      contextType: "issue_review",
+      artifacts: [],
+      errors: [],
+    });
+    mockIssuesApi.getDocument.mockRejectedValue(new Error("document not found"));
+    mockIssuesApi.getCostSummary.mockResolvedValue({
+      issueCount: 1,
+      costCents: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      runtimeMs: 0,
+    });
     mockIssuesApi.listFeedbackVotes.mockResolvedValue([]);
     mockIssuesApi.markRead.mockResolvedValue({ id: "issue-1", lastReadAt: new Date().toISOString() });
     mockIssuesApi.getTreeControlState.mockResolvedValue({ activePauseHold: null });
@@ -976,6 +1005,7 @@ describe("IssueDetail", () => {
     mockIssueChatThreadRender.mockClear();
     mockImageGalleryRender.mockClear();
     mockIssueWorkspaceCardRender.mockClear();
+    mockReviewedAssetsPanelRender.mockClear();
   });
 
   afterEach(async () => {
@@ -1082,6 +1112,32 @@ describe("IssueDetail", () => {
       const tooltip = document.body.querySelector('[data-testid="issue-originating-tooltip"]');
       expect(tooltip?.textContent).toContain("Originating");
       expect(tooltip?.textContent).toContain("Dotta");
+    });
+  });
+
+  it("loads reviewed assets for in-review issues and renders the panel in the page body", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({ status: "in_review" }));
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    await waitForAssertion(() => {
+      expect(mockIssuesApi.getReviewedArtifacts).toHaveBeenCalledWith("PAP-1");
+      expect(container.querySelector('[data-testid="reviewed-assets-panel"]')).not.toBeNull();
+      expect(mockReviewedAssetsPanelRender).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issuePathId: "PAP-1",
+          companyId: "company-1",
+          isLoading: false,
+        }),
+      );
     });
   });
 

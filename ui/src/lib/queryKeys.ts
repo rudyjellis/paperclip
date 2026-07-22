@@ -73,6 +73,7 @@ export const queryKeys = {
     interactions: (issueId: string) => ["issues", "interactions", issueId] as const,
     acceptedPlanDecompositions: (issueId: string) =>
       ["issues", "accepted-plan-decompositions", issueId] as const,
+    reviewedArtifacts: (issueId: string) => ["issues", "reviewed-artifacts", issueId] as const,
     feedbackVotes: (issueId: string) => ["issues", "feedback-votes", issueId] as const,
     costSummary: (issueId: string, options: { excludeRoot?: boolean } = {}) =>
       options.excludeRoot
@@ -207,6 +208,7 @@ export const queryKeys = {
     detail: (approvalId: string) => ["approvals", "detail", approvalId] as const,
     comments: (approvalId: string) => ["approvals", "comments", approvalId] as const,
     issues: (approvalId: string) => ["approvals", "issues", approvalId] as const,
+    reviewedArtifacts: (approvalId: string) => ["approvals", "reviewed-artifacts", approvalId] as const,
   },
   access: {
     invites: (companyId: string, state: string = "all", limit: number = 20) =>

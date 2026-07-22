@@ -218,3 +218,14 @@ export function shouldShowReviewedAssetsPanel({
   const model = mapReviewedArtifactsResponse(response);
   return issue.status === "in_review" || hasPendingLinkedApproval(linkedApprovals) || model.items.length > 0;
 }
+
+export function shouldShowApprovalReviewedAssetsPanel({
+  approval,
+  response,
+}: {
+  approval: Pick<Approval, "status">;
+  response?: ReviewedArtifactsWireResponse | null;
+}) {
+  const model = mapReviewedArtifactsResponse(response);
+  return approval.status === "pending" || approval.status === "revision_requested" || model.items.length > 0;
+}
