@@ -67,6 +67,18 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
     return false;
   }
 
+  function parseOptionalNonNegativeNumber(value: unknown, label: string) {
+    if (value === undefined) return { value: undefined, error: null };
+    if (typeof value !== "string") {
+      return { value: undefined, error: `${label} must be a number` };
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return { value: undefined, error: `${label} must be a non-negative number` };
+    }
+    return { value: parsed, error: null };
+  }
+
   router.get("/companies/:companyId/execution-workspaces", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -82,6 +94,29 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
       ? await svc.listSummaries(companyId, filters)
       : await svc.list(companyId, filters);
     res.json(workspaces);
+  });
+
+  router.get("/companies/:companyId/execution-workspaces/cleanup-inventory", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    if (!(await assertExecutionWorkspaceReadAllowed(req, res, companyId))) return;
+
+    const minAgeHours = parseOptionalNonNegativeNumber(req.query.minAgeHours, "minAgeHours");
+    if (minAgeHours.error) {
+      res.status(422).json({ error: minAgeHours.error });
+      return;
+    }
+    const maxDepth = parseOptionalNonNegativeNumber(req.query.maxDepth, "maxDepth");
+    if (maxDepth.error) {
+      res.status(422).json({ error: maxDepth.error });
+      return;
+    }
+
+    const inventory = await svc.listCleanupInventory(companyId, {
+      minAgeHours: minAgeHours.value,
+      maxDepth: maxDepth.value,
+    });
+    res.json(inventory);
   });
 
   router.get("/companies/:companyId/workspace-overview", async (req, res) => {

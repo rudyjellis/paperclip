@@ -8,6 +8,7 @@ const mockExecutionWorkspaceService = vi.hoisted(() => ({
   list: vi.fn(),
   listOverview: vi.fn(),
   listSummaries: vi.fn(),
+  listCleanupInventory: vi.fn(),
   getById: vi.fn(),
   getCloseReadiness: vi.fn(),
   update: vi.fn(),
@@ -66,6 +67,22 @@ describe.sequential("execution workspace routes", () => {
       hasMore: false,
       nextOffset: null,
     });
+    mockExecutionWorkspaceService.listCleanupInventory.mockResolvedValue({
+      generatedAt: "2026-07-23T12:00:00.000Z",
+      companyId: "company-1",
+      minAgeHours: 24,
+      maxDepth: 6,
+      summary: {
+        totalWorkspaces: 0,
+        generatedCleanupEligible: 0,
+        generatedCleanupBlocked: 0,
+        retirementEligible: 0,
+        retirementBlocked: 0,
+        reclaimableBytes: 0,
+        reclaimableCandidateCount: 0,
+      },
+      workspaces: [],
+    });
     mockExecutionWorkspaceService.listSummaries.mockResolvedValue([
       {
         id: "workspace-1",
@@ -117,6 +134,18 @@ describe.sequential("execution workspace routes", () => {
       status: ["active", "idle"],
       limit: 25,
       offset: 10,
+    });
+  });
+
+  it("delegates cleanup inventory queries with optional thresholds", async () => {
+    const res = await request(createApp())
+      .get("/api/companies/company-1/execution-workspaces/cleanup-inventory?minAgeHours=12&maxDepth=4");
+
+    expect(res.status).toBe(200);
+    expect(res.body.summary.totalWorkspaces).toBe(0);
+    expect(mockExecutionWorkspaceService.listCleanupInventory).toHaveBeenCalledWith("company-1", {
+      minAgeHours: 12,
+      maxDepth: 4,
     });
   });
 

@@ -243,6 +243,37 @@ export async function syncDraftAdvisory(fetchImpl, token, repo, prNumber, prTitl
   });
 }
 
+export function isRecoverableAdvisorySyncError(error) {
+  const status = Number(error?.status);
+  const message = String(error?.message ?? "");
+  return (
+    status === 403 ||
+    (status === 404 && message.includes("security-advisories")) ||
+    message.includes("Resource not accessible by integration")
+  );
+}
+
+export async function syncDraftAdvisoryBestEffort(
+  fetchImpl,
+  token,
+  repo,
+  prNumber,
+  prTitle,
+  flags,
+  warn = console.warn,
+) {
+  try {
+    await syncDraftAdvisory(fetchImpl, token, repo, prNumber, prTitle, flags);
+    return true;
+  } catch (error) {
+    if (!isRecoverableAdvisorySyncError(error)) throw error;
+    warn(
+      `[security] draft advisory unavailable for PR #${prNumber}; continuing without advisory because the integration cannot access repository advisories (${error.message}).`,
+    );
+    return false;
+  }
+}
+
 // Cap pagination so a large backlog of unrelated draft advisories cannot stall
 // the security gate (it runs inside a 5-minute workflow timeout).
 const MAX_DRAFT_ADVISORY_PAGES = 20;
@@ -281,15 +312,18 @@ export async function postSecurityCheckRun(fetchImpl, token, repo, headSha, hasF
       name: 'security-review',
       head_sha: headSha,
       // `completed/neutral` instead of `in_progress` so the check doesn't put
-      // the PR in `mergeStateStatus: BLOCKED`. The draft advisory is the
-      // durable signal for maintainers; there is no completion path that
-      // could ever flip an `in_progress` check-run back to completed on the
-      // same head SHA, so it would hang forever.
+      // the PR in `mergeStateStatus: BLOCKED`. This completed check is the
+      // durable reviewer-visible signal, and when repository advisories are
+      // available the draft advisory supplements it for maintainer follow-up.
+      // There is no completion path that could ever flip an `in_progress`
+      // check-run back to completed on the same head SHA, so it would hang
+      // forever.
       status: 'completed',
       conclusion: 'neutral',
       output: {
         title: 'Security Review Recommended',
-        summary: 'Draft advisory filed for maintainer review. Not a merge block — review the advisory at your leisure.',
+        summary:
+          'Security-sensitive changes detected. Draft advisories are filed when repository permissions allow; otherwise this check remains the maintainer-visible signal. Not a merge block.',
       },
     } : {
       name: 'security-review',
@@ -373,9 +407,11 @@ async function main() {
   ];
 
   if (allFlags.length > 0) {
-    console.error(`[security] ${allFlags.length} flag(s) detected — creating draft advisory and pending check run`);
+    console.error(
+      `[security] ${allFlags.length} flag(s) detected — attempting draft advisory sync and posting reviewer-visible check run`,
+    );
     await Promise.all([
-      syncDraftAdvisory(ghFetch, GH_TOKEN, GH_REPO, prNumber, pr.title, allFlags),
+      syncDraftAdvisoryBestEffort(ghFetch, GH_TOKEN, GH_REPO, prNumber, pr.title, allFlags),
       postSecurityCheckRun(ghFetch, GH_TOKEN, GH_REPO, pr.head.sha, true),
     ]);
   } else {

@@ -82,6 +82,8 @@ import {
 } from "./worktree-merge-history-lib.js";
 import {
   collectGeneratedCleanupRoot,
+  DEFAULT_MAX_DEPTH,
+  DEFAULT_MIN_AGE_HOURS,
   worktreeGeneratedCleanupCommand,
 } from "./worktree-generated-cleanup.js";
 
@@ -3443,8 +3445,8 @@ export function registerWorktreeCommands(program: Command): void {
     .option("--root <path>", "Explicit git worktree root to scan (repeatable)", collectGeneratedCleanupRoot, [])
     .option("--all-git-worktrees", "Scan every git worktree instead of only Paperclip-managed worktrees", false)
     .option("--include-current", "Include the current worktree; skipped by default as an active workspace guard", false)
-    .option("--min-age-hours <hours>", "Minimum generated directory age before cleanup", (value) => Number(value), 24)
-    .option("--max-depth <depth>", "Maximum directory depth to scan inside each worktree", (value) => Number(value), 6)
+    .option("--min-age-hours <hours>", "Minimum generated directory age before cleanup", (value) => Number(value), DEFAULT_MIN_AGE_HOURS)
+    .option("--max-depth <depth>", "Maximum directory depth to scan inside each worktree", (value) => Number(value), DEFAULT_MAX_DEPTH)
     .option("--apply", "Delete eligible generated directories after reporting the plan", false)
     .option("--json", "Print the cleanup plan as JSON")
     .action(worktreeGeneratedCleanupCommand);
