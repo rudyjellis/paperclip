@@ -3575,6 +3575,15 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/api/companies/{companyId}/execution-workspaces/cleanup-inventory",
+  tags: ["execution-workspaces"],
+  summary: "List cleanup-inventory classifications for a company's execution workspaces",
+  request: { params: z.object({ companyId: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/api/companies/{companyId}/workspace-overview",
   tags: ["execution-workspaces"],
   summary: "List bounded execution workspace overview rows for a company",

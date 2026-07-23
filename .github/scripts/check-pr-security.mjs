@@ -243,6 +243,37 @@ export async function syncDraftAdvisory(fetchImpl, token, repo, prNumber, prTitl
   });
 }
 
+export function isRecoverableAdvisorySyncError(error) {
+  const status = Number(error?.status);
+  const message = String(error?.message ?? "");
+  return (
+    status === 403 ||
+    (status === 404 && message.includes("security-advisories")) ||
+    message.includes("Resource not accessible by integration")
+  );
+}
+
+export async function syncDraftAdvisoryBestEffort(
+  fetchImpl,
+  token,
+  repo,
+  prNumber,
+  prTitle,
+  flags,
+  warn = console.warn,
+) {
+  try {
+    await syncDraftAdvisory(fetchImpl, token, repo, prNumber, prTitle, flags);
+    return true;
+  } catch (error) {
+    if (!isRecoverableAdvisorySyncError(error)) throw error;
+    warn(
+      `[security] draft advisory unavailable for PR #${prNumber}; continuing without advisory because the integration cannot access repository advisories (${error.message}).`,
+    );
+    return false;
+  }
+}
+
 // Cap pagination so a large backlog of unrelated draft advisories cannot stall
 // the security gate (it runs inside a 5-minute workflow timeout).
 const MAX_DRAFT_ADVISORY_PAGES = 20;
@@ -375,7 +406,7 @@ async function main() {
   if (allFlags.length > 0) {
     console.error(`[security] ${allFlags.length} flag(s) detected — creating draft advisory and pending check run`);
     await Promise.all([
-      syncDraftAdvisory(ghFetch, GH_TOKEN, GH_REPO, prNumber, pr.title, allFlags),
+      syncDraftAdvisoryBestEffort(ghFetch, GH_TOKEN, GH_REPO, prNumber, pr.title, allFlags),
       postSecurityCheckRun(ghFetch, GH_TOKEN, GH_REPO, pr.head.sha, true),
     ]);
   } else {
