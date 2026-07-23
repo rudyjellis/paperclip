@@ -14,7 +14,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./secrets": "./src/secrets/index.ts"
+    "./secrets": "./src/secrets/index.ts",
+    "./workspace-cleanup": "./src/workspace-cleanup.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -26,6 +27,10 @@
       "./secrets": {
         "types": "./dist/secrets/index.d.ts",
         "import": "./dist/secrets/index.js"
+      },
+      "./workspace-cleanup": {
+        "types": "./dist/workspace-cleanup.d.ts",
+        "import": "./dist/workspace-cleanup.js"
       }
     },
     "main": "./dist/index.js",

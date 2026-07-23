@@ -149,6 +149,15 @@ async function createTempRepo() {
   return repoRoot;
 }
 
+async function createCleanupInventoryRepo(branchName: string) {
+  const repoRoot = await createTempRepo();
+  await fs.writeFile(path.join(repoRoot, ".gitignore"), "node_modules/\ndist/\n", "utf8");
+  await runGit(repoRoot, ["add", ".gitignore"]);
+  await runGit(repoRoot, ["commit", "-m", "Add cleanup ignores"]);
+  await runGit(repoRoot, ["checkout", "-b", branchName]);
+  return repoRoot;
+}
+
 async function createTempRemoteRepo() {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-execution-workspace-remote-"));
   const remoteRoot = path.join(tempRoot, "remote.git");
@@ -1058,6 +1067,231 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     });
     expect(readiness?.blockingReasons).toContain("A reusable environment lease still owns this workspace.");
   });
+
+  it("builds operator cleanup inventory for generated cleanup, finalize blockers, and open-issue blockers", async () => {
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const agentId = randomUUID();
+    const succeededRunId = randomUUID();
+    const failedRunId = randomUUID();
+    const generatedWorkspaceId = randomUUID();
+    const openIssueWorkspaceId = randomUUID();
+    const finalizeWorkspaceId = randomUUID();
+    const generatedRepo = await createCleanupInventoryRepo("paperclip/generated-cleanup");
+    const openIssueRepo = await createCleanupInventoryRepo("paperclip/open-issue");
+    const finalizeRepo = await createCleanupInventoryRepo("paperclip/finalize-blocked");
+    tempDirs.add(generatedRepo);
+    tempDirs.add(openIssueRepo);
+    tempDirs.add(finalizeRepo);
+
+    await fs.mkdir(path.join(generatedRepo, "node_modules", "pkg"), { recursive: true });
+    await fs.writeFile(path.join(generatedRepo, "node_modules", "pkg", "index.js"), "module.exports = 1;\n", "utf8");
+    await fs.mkdir(path.join(generatedRepo, "dist"), { recursive: true });
+    await fs.writeFile(path.join(generatedRepo, "dist", "bundle.js"), "console.log('built');\n", "utf8");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Backend Engineer",
+      role: "BackendEngineer",
+      status: "active",
+      systemPrompt: "test",
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Cleanup inventory",
+      status: "in_progress",
+      executionWorkspacePolicy: {
+        enabled: true,
+      },
+    });
+    await db.insert(heartbeatRuns).values([
+      {
+        id: succeededRunId,
+        companyId,
+        agentId,
+        status: "succeeded",
+      },
+      {
+        id: failedRunId,
+        companyId,
+        agentId,
+        status: "failed",
+      },
+    ]);
+    await db.insert(executionWorkspaces).values([
+      {
+        id: generatedWorkspaceId,
+        companyId,
+        projectId,
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        name: "Generated cleanup workspace",
+        status: "active",
+        providerType: "git_worktree",
+        cwd: generatedRepo,
+        providerRef: generatedRepo,
+        branchName: "paperclip/generated-cleanup",
+        baseRef: "main",
+        metadata: {
+          createdByRuntime: true,
+        },
+      },
+      {
+        id: openIssueWorkspaceId,
+        companyId,
+        projectId,
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        name: "Open issue workspace",
+        status: "active",
+        providerType: "git_worktree",
+        cwd: openIssueRepo,
+        providerRef: openIssueRepo,
+        branchName: "paperclip/open-issue",
+        baseRef: "main",
+        metadata: {
+          createdByRuntime: true,
+        },
+      },
+      {
+        id: finalizeWorkspaceId,
+        companyId,
+        projectId,
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        name: "Finalize blocked workspace",
+        status: "active",
+        providerType: "git_worktree",
+        cwd: finalizeRepo,
+        providerRef: finalizeRepo,
+        branchName: "paperclip/finalize-blocked",
+        baseRef: "main",
+        metadata: {
+          createdByRuntime: true,
+        },
+      },
+    ]);
+    await db.insert(workspaceOperations).values([
+      {
+        id: randomUUID(),
+        companyId,
+        executionWorkspaceId: generatedWorkspaceId,
+        heartbeatRunId: succeededRunId,
+        phase: "workspace_finalize",
+        command: "workspace finalize",
+        status: "succeeded",
+        startedAt: new Date("2026-07-23T10:00:00.000Z"),
+        finishedAt: new Date("2026-07-23T10:01:00.000Z"),
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        executionWorkspaceId: openIssueWorkspaceId,
+        heartbeatRunId: succeededRunId,
+        phase: "workspace_finalize",
+        command: "workspace finalize",
+        status: "succeeded",
+        startedAt: new Date("2026-07-23T10:02:00.000Z"),
+        finishedAt: new Date("2026-07-23T10:03:00.000Z"),
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        executionWorkspaceId: finalizeWorkspaceId,
+        heartbeatRunId: failedRunId,
+        phase: "workspace_finalize",
+        command: "workspace finalize",
+        status: "failed",
+        startedAt: new Date("2026-07-23T10:04:00.000Z"),
+        finishedAt: new Date("2026-07-23T10:05:00.000Z"),
+      },
+    ]);
+    await db.insert(issues).values({
+      id: randomUUID(),
+      companyId,
+      projectId,
+      title: "Still open",
+      status: "todo",
+      priority: "medium",
+      executionWorkspaceId: openIssueWorkspaceId,
+    });
+
+    const inventory = await svc.listCleanupInventory(companyId, {
+      minAgeHours: 0,
+      checkLiveProcesses: false,
+      now: new Date("2026-07-23T12:00:00.000Z"),
+    });
+    const byName = new Map(inventory.workspaces.map((workspace) => [workspace.workspaceName, workspace]));
+    const generated = byName.get("Generated cleanup workspace");
+    const openIssue = byName.get("Open issue workspace");
+    const finalizeBlocked = byName.get("Finalize blocked workspace");
+
+    expect(inventory.summary).toMatchObject({
+      totalWorkspaces: 3,
+      generatedCleanupEligible: 1,
+      generatedCleanupBlocked: 2,
+      retirementEligible: 1,
+      retirementBlocked: 2,
+      reclaimableCandidateCount: 2,
+    });
+    expect(inventory.summary.reclaimableBytes).toBeGreaterThan(0);
+
+    expect(generated).toMatchObject({
+      linkedIssueCount: 0,
+      nonTerminalLinkedIssueCount: 0,
+      hasNonTerminalLinkedIssues: false,
+      generatedCleanup: {
+        state: "eligible",
+        eligibleCandidateCount: 2,
+      },
+      retirement: {
+        state: "eligible",
+        finalizeState: "verified",
+      },
+      git: {
+        hasDirtyTrackedFiles: false,
+        hasUntrackedFiles: false,
+        aheadCount: 0,
+        behindCount: 0,
+      },
+    });
+    expect(generated?.generatedCleanup.candidates.map((candidate) => candidate.relativePath).sort()).toEqual([
+      "dist",
+      "node_modules",
+    ]);
+
+    expect(openIssue).toMatchObject({
+      linkedIssueCount: 1,
+      nonTerminalLinkedIssueCount: 1,
+      hasNonTerminalLinkedIssues: true,
+      retirement: {
+        state: "blocked",
+        finalizeState: "verified",
+      },
+    });
+    expect(openIssue?.retirement.reasons).toContain("This workspace is still linked to an open issue.");
+
+    expect(finalizeBlocked).toMatchObject({
+      linkedIssueCount: 0,
+      nonTerminalLinkedIssueCount: 0,
+      retirement: {
+        state: "blocked",
+        finalizeState: "failed_latest",
+        finalizeReason: "The latest workspace finalize failed, so Paperclip cannot prove this workspace synced back safely.",
+      },
+    });
+    expect(finalizeBlocked?.retirement.reasons).toContain(
+      "The latest workspace finalize failed, so Paperclip cannot prove this workspace synced back safely.",
+    );
+  }, 20_000);
 
   it("distinguishes stale local base branches from true unmerged worktree commits", async () => {
     const { tempRoot, repoRoot } = await createTempRemoteRepo();

@@ -12,6 +12,11 @@ interface CompanyOptions extends BaseClientOptions {
   companyId?: string;
 }
 
+interface CleanupInventoryOptions extends CompanyOptions {
+  minAgeHours?: string;
+  maxDepth?: string;
+}
+
 interface JsonPayloadOptions extends CompanyOptions {
   payloadJson: string;
 }
@@ -33,6 +38,30 @@ export function registerWorkspaceCommands(program: Command): void {
 
   const workspace = program.command("workspace").description("Execution workspace operations");
   addCompanyGet(workspace, "list", "List execution workspaces", "execution-workspaces");
+  addCommonClientOptions(
+    workspace
+      .command("cleanup-inventory")
+      .description("List generated-cleanup vs worktree-retirement inventory for execution workspaces")
+      .option("-C, --company-id <id>", "Company ID")
+      .option("--min-age-hours <hours>", "Minimum generated-directory age before cleanup eligibility")
+      .option("--max-depth <depth>", "Maximum directory depth to scan for generated directories")
+      .action(async (opts: CleanupInventoryOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts, { requireCompany: true });
+          const search = new URLSearchParams();
+          if (opts.minAgeHours) search.set("minAgeHours", opts.minAgeHours);
+          if (opts.maxDepth) search.set("maxDepth", opts.maxDepth);
+          const suffix = search.size > 0 ? `?${search.toString()}` : "";
+          const result = await ctx.api.get(
+            `${apiPath`/api/companies/${ctx.companyId}/execution-workspaces/cleanup-inventory`}${suffix}`,
+          );
+          printOutput(result, { json: ctx.json });
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+    { includeCompany: false },
+  );
   addIdGet(workspace, "get", "Get an execution workspace", "execution-workspaces");
   addIdGet(workspace, "close-readiness", "Check execution workspace close readiness", "execution-workspaces", "close-readiness");
   addIdGet(workspace, "operations", "List execution workspace operations", "execution-workspaces", "workspace-operations");

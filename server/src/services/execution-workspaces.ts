@@ -30,6 +30,13 @@ import type {
   WorkspaceOverviewQuery,
 } from "@paperclipai/shared";
 import { deriveProjectUrlKey, WORKSPACE_OVERVIEW_LINKED_ISSUE_LIMIT } from "@paperclipai/shared";
+import {
+  planGeneratedDependencyCleanup,
+  type ExecutionWorkspaceCleanupInventory,
+  type WorkspaceCleanupFinalizeState,
+  type WorkspaceGeneratedCleanupInventory,
+  type WorkspaceRetirementInventory,
+} from "../workspace-cleanup.js";
 import { parseProjectExecutionWorkspacePolicy } from "./execution-workspace-policy.js";
 import { readProjectWorkspaceRuntimeConfig } from "./project-workspace-runtime-config.js";
 import {
@@ -43,6 +50,17 @@ const execFileAsync = promisify(execFile);
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const REUSABLE_LEASE_BLOCKING_STATUSES = ["active", "pending_cleanup"] as const;
+const DESTRUCTIVE_RETIREMENT_ACTION_KINDS = new Set<ExecutionWorkspaceCloseAction["kind"]>([
+  "git_worktree_remove",
+  "git_branch_delete",
+  "remove_local_directory",
+]);
+const FAILED_FINALIZE_BLOCKING_REASON =
+  "The latest workspace finalize failed, so Paperclip cannot prove this workspace synced back safely.";
+const MISSING_FINALIZE_BLOCKING_REASON =
+  "Paperclip cannot prove a successful workspace finalize after the most recent workspace run.";
+const NO_RETIREABLE_ACTION_REASON =
+  "Workspace close does not plan a retireable worktree or directory action.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -491,6 +509,141 @@ function toExecutionWorkspaceSummary(
   };
 }
 
+function summarizeGeneratedCleanupSkippedReasons(inventory: WorkspaceGeneratedCleanupInventory) {
+  const counts = new Map<string, number>();
+  for (const candidate of inventory.candidates) {
+    if (candidate.action !== "skipped" || !candidate.reason) continue;
+    counts.set(candidate.reason, (counts.get(candidate.reason) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 3)
+    .map(([reason, count]) => `${reason}${count > 1 ? ` (${count})` : ""}`)
+    .join("; ");
+}
+
+function buildGeneratedCleanupInventory(input: {
+  path: string | null;
+  branchName: string | null;
+  minAgeHours?: number;
+  maxDepth?: number;
+  now: Date;
+  checkLiveProcesses?: boolean;
+  liveProcessCwdChecker?: (root: string) => boolean | null;
+}): WorkspaceGeneratedCleanupInventory {
+  if (!input.path) {
+    return {
+      state: "blocked",
+      reason: "Workspace has no local path for generated cleanup inspection.",
+      inspectionStatus: "skipped",
+      liveProcessCheck: "skipped",
+      totalCandidateCount: 0,
+      eligibleCandidateCount: 0,
+      reclaimableBytes: 0,
+      candidates: [],
+    };
+  }
+
+  const plan = planGeneratedDependencyCleanup({
+    cwd: input.path,
+    root: [input.path],
+    includeCurrent: true,
+    minAgeHours: input.minAgeHours,
+    maxDepth: input.maxDepth,
+    now: input.now,
+    checkLiveProcesses: input.checkLiveProcesses,
+    liveProcessCwdChecker: input.liveProcessCwdChecker,
+  });
+  const worktree = plan.worktrees[0];
+  if (!worktree) {
+    return {
+      state: "blocked",
+      reason: "Workspace could not be inspected for generated cleanup.",
+      inspectionStatus: "skipped",
+      liveProcessCheck: "skipped",
+      totalCandidateCount: 0,
+      eligibleCandidateCount: 0,
+      reclaimableBytes: 0,
+      candidates: [],
+    };
+  }
+
+  const eligibleCandidates = worktree.candidates.filter((candidate) => candidate.action === "would_delete");
+  const reclaimableBytes = eligibleCandidates.reduce((total, candidate) => total + candidate.sizeBytes, 0);
+  const inventory: WorkspaceGeneratedCleanupInventory = {
+    state: eligibleCandidates.length > 0 ? "eligible" : "blocked",
+    reason: null,
+    inspectionStatus: worktree.status,
+    liveProcessCheck: worktree.liveProcessCheck,
+    totalCandidateCount: worktree.candidates.length,
+    eligibleCandidateCount: eligibleCandidates.length,
+    reclaimableBytes,
+    candidates: worktree.candidates,
+  };
+
+  if (worktree.status !== "scanned") {
+    inventory.state = "blocked";
+    inventory.reason = worktree.reason ?? "Workspace did not pass generated cleanup inspection.";
+    return inventory;
+  }
+
+  if (eligibleCandidates.length > 0) {
+    return inventory;
+  }
+
+  inventory.state = "blocked";
+  if (worktree.candidates.length === 0) {
+    inventory.reason = "No generated directories matched the cleanup inventory allowlist.";
+    return inventory;
+  }
+
+  const skippedReasonSummary = summarizeGeneratedCleanupSkippedReasons(inventory);
+  inventory.reason = skippedReasonSummary
+    ? `No generated directories are currently reclaimable (${skippedReasonSummary}).`
+    : "No generated directories are currently reclaimable.";
+  return inventory;
+}
+
+function hasRetireableWorkspaceAction(readiness: ExecutionWorkspaceCloseReadiness) {
+  return readiness.plannedActions.some((action) => DESTRUCTIVE_RETIREMENT_ACTION_KINDS.has(action.kind));
+}
+
+function deriveFinalizeState(
+  readiness: ExecutionWorkspaceCloseReadiness,
+  hasRetireableAction: boolean,
+): { state: WorkspaceCleanupFinalizeState; reason: string | null } {
+  if (!hasRetireableAction) {
+    return { state: "not_required", reason: null };
+  }
+  if (readiness.blockingReasons.includes(FAILED_FINALIZE_BLOCKING_REASON)) {
+    return { state: "failed_latest", reason: FAILED_FINALIZE_BLOCKING_REASON };
+  }
+  if (readiness.blockingReasons.includes(MISSING_FINALIZE_BLOCKING_REASON)) {
+    return { state: "missing_proof", reason: MISSING_FINALIZE_BLOCKING_REASON };
+  }
+  return { state: "verified", reason: null };
+}
+
+function buildRetirementInventory(readiness: ExecutionWorkspaceCloseReadiness): WorkspaceRetirementInventory {
+  const retireableAction = hasRetireableWorkspaceAction(readiness);
+  const finalize = deriveFinalizeState(readiness, retireableAction);
+  const reasons = [
+    ...(retireableAction ? [] : [NO_RETIREABLE_ACTION_REASON]),
+    ...readiness.blockingReasons,
+  ];
+
+  return {
+    state: retireableAction && readiness.isDestructiveCloseAllowed ? "eligible" : "blocked",
+    reasons,
+    hasRetireableAction: retireableAction,
+    closeReadinessState: readiness.state,
+    finalizeState: finalize.state,
+    finalizeReason: finalize.reason,
+    plannedActions: readiness.plannedActions,
+    warnings: readiness.warnings,
+  };
+}
+
 function maxDate(...values: Array<Date | string | null | undefined>): Date {
   let latest = new Date(0);
   for (const value of values) {
@@ -610,7 +763,7 @@ export function executionWorkspaceService(db: Db) {
     return conditions;
   }
 
-  return {
+  const service = {
     listOverview: async (
       companyId: string,
       filters: WorkspaceOverviewQuery,
@@ -865,6 +1018,85 @@ export function executionWorkspaceService(db: Db) {
         .where(and(...conditions))
         .orderBy(desc(executionWorkspaces.lastUsedAt), desc(executionWorkspaces.createdAt));
       return rows.map((row) => toExecutionWorkspaceSummary(row));
+    },
+
+    listCleanupInventory: async (companyId: string, options?: {
+      minAgeHours?: number;
+      maxDepth?: number;
+      now?: Date;
+      checkLiveProcesses?: boolean;
+      liveProcessCwdChecker?: (root: string) => boolean | null;
+    }): Promise<ExecutionWorkspaceCleanupInventory> => {
+      const conditions = buildListConditions(companyId);
+      const rows = await db
+        .select()
+        .from(executionWorkspaces)
+        .where(and(...conditions))
+        .orderBy(desc(executionWorkspaces.lastUsedAt), desc(executionWorkspaces.createdAt));
+      const runtimeServicesByWorkspaceId = await loadEffectiveRuntimeServicesByExecutionWorkspace(db, companyId, rows);
+      const workspaces = rows.map((row) =>
+        toExecutionWorkspace(
+          row,
+          (runtimeServicesByWorkspaceId.get(row.id) ?? []).map(toRuntimeService),
+        ),
+      );
+      const now = options?.now ?? new Date();
+
+      const inventoryItems = await Promise.all(workspaces.map(async (workspace) => {
+        const readiness = await service.getCloseReadiness(workspace.id);
+        if (!readiness) {
+          throw new Error(`Execution workspace ${workspace.id} disappeared during cleanup inventory generation.`);
+        }
+
+        const workspacePath = readNullableString(workspace.providerRef) ?? readNullableString(workspace.cwd);
+        const generatedCleanup = buildGeneratedCleanupInventory({
+          path: workspacePath,
+          branchName: workspace.branchName,
+          minAgeHours: options?.minAgeHours,
+          maxDepth: options?.maxDepth,
+          now,
+          checkLiveProcesses: options?.checkLiveProcesses,
+          liveProcessCwdChecker: options?.liveProcessCwdChecker,
+        });
+        const retirement = buildRetirementInventory(readiness);
+        const nonTerminalLinkedIssueCount = readiness.linkedIssues.filter((issue) => !issue.isTerminal).length;
+
+        return {
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
+          workspaceStatus: workspace.status,
+          mode: workspace.mode,
+          strategyType: workspace.strategyType,
+          providerType: workspace.providerType,
+          path: workspacePath,
+          branchName: workspace.branchName,
+          baseRef: readiness.git?.baseRef ?? workspace.baseRef,
+          linkedIssueCount: readiness.linkedIssues.length,
+          nonTerminalLinkedIssueCount,
+          hasNonTerminalLinkedIssues: nonTerminalLinkedIssueCount > 0,
+          linkedIssues: readiness.linkedIssues,
+          git: readiness.git,
+          generatedCleanup,
+          retirement,
+        };
+      }));
+
+      return {
+        generatedAt: now.toISOString(),
+        companyId,
+        minAgeHours: options?.minAgeHours ?? 24,
+        maxDepth: options?.maxDepth ?? 6,
+        summary: {
+          totalWorkspaces: inventoryItems.length,
+          generatedCleanupEligible: inventoryItems.filter((item) => item.generatedCleanup.state === "eligible").length,
+          generatedCleanupBlocked: inventoryItems.filter((item) => item.generatedCleanup.state === "blocked").length,
+          retirementEligible: inventoryItems.filter((item) => item.retirement.state === "eligible").length,
+          retirementBlocked: inventoryItems.filter((item) => item.retirement.state === "blocked").length,
+          reclaimableBytes: inventoryItems.reduce((total, item) => total + item.generatedCleanup.reclaimableBytes, 0),
+          reclaimableCandidateCount: inventoryItems.reduce((total, item) => total + item.generatedCleanup.eligibleCandidateCount, 0),
+        },
+        workspaces: inventoryItems,
+      };
     },
 
     getById: async (id: string) => {
@@ -1264,6 +1496,8 @@ export function executionWorkspaceService(db: Db) {
       });
     },
   };
+
+  return service;
 }
 
 export { toExecutionWorkspace };

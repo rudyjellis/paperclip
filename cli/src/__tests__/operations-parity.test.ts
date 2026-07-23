@@ -83,6 +83,7 @@ describe("operations parity commands", () => {
     await run(["org", "svg", "--company-id", COMPANY_ID]);
     await run(["agent-config", "list", "--company-id", COMPANY_ID]);
     await run(["workspace", "list", "--company-id", COMPANY_ID]);
+    await run(["workspace", "cleanup-inventory", "--company-id", COMPANY_ID, "--min-age-hours", "12", "--max-depth", "4"]);
     await run(["workspace", "get", WORKSPACE_ID]);
     await run(["workspace", "close-readiness", WORKSPACE_ID]);
     await run(["workspace", "operations", WORKSPACE_ID]);
@@ -108,6 +109,7 @@ describe("operations parity commands", () => {
       ["GET", `http://localhost:3100/api/companies/${COMPANY_ID}/org.svg`],
       ["GET", `http://localhost:3100/api/companies/${COMPANY_ID}/agent-configurations`],
       ["GET", `http://localhost:3100/api/companies/${COMPANY_ID}/execution-workspaces`],
+      ["GET", `http://localhost:3100/api/companies/${COMPANY_ID}/execution-workspaces/cleanup-inventory?minAgeHours=12&maxDepth=4`],
       ["GET", `http://localhost:3100/api/execution-workspaces/${WORKSPACE_ID}`],
       ["GET", `http://localhost:3100/api/execution-workspaces/${WORKSPACE_ID}/close-readiness`],
       ["GET", `http://localhost:3100/api/execution-workspaces/${WORKSPACE_ID}/workspace-operations`],

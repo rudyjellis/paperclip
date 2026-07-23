@@ -72,6 +72,14 @@ pnpm paperclipai worktree:clean-generated --apply
 
 This cleanup path is intentionally narrower than execution-workspace archival. It does not delete source files, git metadata, branches, run logs, backups, secrets, databases, or Paperclip instance data.
 
+To compare reclaimable generated artifacts against fully retireable execution workspaces before deleting anything, run:
+
+```sh
+pnpm paperclipai workspace cleanup-inventory --company-id <company-id>
+```
+
+That report uses the same generated-cleanup checks as `worktree:clean-generated` plus the execution-workspace close-readiness policy, so operators can distinguish "safe to reclaim caches/build outputs" from "safe to retire the whole worktree" without re-checking git status, linked issues, or finalize proof by hand.
+
 ## Resolved workspace logic during heartbeat runs
 
 Heartbeat still resolves a workspace for the run, but that is about code location and session continuity, not runtime-service control.
