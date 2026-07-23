@@ -7,12 +7,17 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { inArray } from "drizzle-orm";
 import {
+  agents,
   companies,
   createDb,
+  environmentLeases,
+  environments,
   executionWorkspaces,
+  heartbeatRuns,
   issues,
   projectWorkspaces,
   projects,
+  workspaceOperations,
   workspaceRuntimeServices,
 } from "@paperclipai/db";
 import {
@@ -174,10 +179,15 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
 
   afterEach(async () => {
     await db.delete(workspaceRuntimeServices);
+    await db.delete(environmentLeases);
+    await db.delete(workspaceOperations);
     await db.delete(issues);
+    await db.delete(heartbeatRuns);
     await db.delete(executionWorkspaces);
+    await db.delete(environments);
     await db.delete(projectWorkspaces);
     await db.delete(projects);
+    await db.delete(agents);
     await db.delete(companies);
 
     for (const dir of tempDirs) {
@@ -746,7 +756,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     expect(archivedOnly.items.map((item) => item.workspaceId)).toEqual([archivedWorkspaceId]);
   });
 
-  it("warns about dirty and unmerged git worktrees and reports cleanup actions", async () => {
+  it("blocks destructive close when a git worktree is dirty and ahead without merge proof", async () => {
     const repoRoot = await createTempRepo();
     tempDirs.add(repoRoot);
     const worktreePath = path.join(path.dirname(repoRoot), `paperclip-worktree-${randomUUID()}`);
@@ -819,10 +829,10 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
 
     expect(readiness).toMatchObject({
       workspaceId: executionWorkspaceId,
-      state: "ready_with_warnings",
+      state: "blocked",
       isSharedWorkspace: false,
       isProjectPrimaryWorkspace: false,
-      isDestructiveCloseAllowed: true,
+      isDestructiveCloseAllowed: false,
       git: {
         workspacePath: worktreePath,
         branchName: "paperclip-close-check",
@@ -835,9 +845,9 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
         isMergedIntoBase: false,
       },
     });
-    expect(readiness?.warnings).toEqual(expect.arrayContaining([
+    expect(readiness?.blockingReasons).toEqual(expect.arrayContaining([
       "The workspace has 1 untracked file.",
-      "This workspace is 1 commit ahead of main and is not merged.",
+      "This workspace is 1 commit ahead of main and is not provably merged.",
     ]));
     expect(readiness?.plannedActions.map((action) => action.kind)).toEqual(expect.arrayContaining([
       "archive_record",
@@ -847,6 +857,207 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       "git_branch_delete",
     ]));
   }, 20_000);
+
+  it("blocks destructive close when the latest workspace finalize did not succeed", async () => {
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const executionWorkspaceId = randomUUID();
+    const runId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Backend Engineer",
+      role: "BackendEngineer",
+      status: "active",
+      systemPrompt: "test",
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Finalize barrier",
+      status: "in_progress",
+      executionWorkspacePolicy: {
+        enabled: true,
+      },
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "failed",
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId,
+      projectId,
+      mode: "isolated_workspace",
+      strategyType: "git_worktree",
+      name: "Finalize blocked workspace",
+      status: "active",
+      providerType: "git_worktree",
+      cwd: "/tmp/finalize-blocked-workspace",
+      providerRef: "/tmp/finalize-blocked-workspace",
+      branchName: "paperclip/finalize",
+      baseRef: "master",
+      metadata: {
+        createdByRuntime: true,
+      },
+    });
+    await db.insert(workspaceOperations).values({
+      id: randomUUID(),
+      companyId,
+      executionWorkspaceId,
+      heartbeatRunId: runId,
+      phase: "workspace_finalize",
+      command: "workspace finalize",
+      status: "failed",
+      startedAt: new Date("2026-07-20T12:00:00.000Z"),
+      finishedAt: new Date("2026-07-20T12:01:00.000Z"),
+    });
+
+    const readiness = await svc.getCloseReadiness(executionWorkspaceId);
+
+    expect(readiness).toMatchObject({
+      workspaceId: executionWorkspaceId,
+      state: "blocked",
+      isDestructiveCloseAllowed: false,
+    });
+    expect(readiness?.blockingReasons).toContain(
+      "The latest workspace finalize failed, so Paperclip cannot prove this workspace synced back safely.",
+    );
+  });
+
+  it("blocks destructive close when no workspace finalize proof exists", async () => {
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const executionWorkspaceId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Missing finalize proof",
+      status: "in_progress",
+      executionWorkspacePolicy: {
+        enabled: true,
+      },
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId,
+      projectId,
+      mode: "isolated_workspace",
+      strategyType: "git_worktree",
+      name: "Missing finalize proof workspace",
+      status: "active",
+      providerType: "git_worktree",
+      cwd: "/tmp/missing-finalize-proof-workspace",
+      providerRef: "/tmp/missing-finalize-proof-workspace",
+      branchName: "paperclip/missing-finalize-proof",
+      baseRef: "master",
+      metadata: {
+        createdByRuntime: true,
+      },
+    });
+
+    const readiness = await svc.getCloseReadiness(executionWorkspaceId);
+
+    expect(readiness).toMatchObject({
+      workspaceId: executionWorkspaceId,
+      state: "blocked",
+      isDestructiveCloseAllowed: false,
+    });
+    expect(readiness?.blockingReasons).toContain(
+      "Paperclip cannot prove a successful workspace finalize after the most recent workspace run.",
+    );
+  });
+
+  it("blocks destructive close when a reusable environment lease still owns the workspace", async () => {
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const environmentId = randomUUID();
+    const executionWorkspaceId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Reusable lease workspace",
+      status: "in_progress",
+      executionWorkspacePolicy: {
+        enabled: true,
+      },
+    });
+    await db.insert(environments).values({
+      id: environmentId,
+      companyId,
+      name: "Sandbox",
+      driver: "sandbox",
+      status: "active",
+      config: {},
+      envVars: {},
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId,
+      projectId,
+      mode: "isolated_workspace",
+      strategyType: "git_worktree",
+      name: "Reusable lease workspace",
+      status: "active",
+      providerType: "git_worktree",
+      cwd: "/tmp/reusable-lease-workspace",
+      providerRef: "/tmp/reusable-lease-workspace",
+      branchName: "paperclip/reusable-lease",
+      baseRef: "master",
+      metadata: {
+        createdByRuntime: true,
+      },
+    });
+    await db.insert(environmentLeases).values({
+      id: randomUUID(),
+      companyId,
+      environmentId,
+      executionWorkspaceId,
+      status: "active",
+      leasePolicy: "reuse_by_environment",
+      provider: "sandbox",
+      providerLeaseId: "lease-1",
+      metadata: {
+        reusableSandboxLease: {
+          version: 1,
+          executionWorkspaceId,
+        },
+      },
+    });
+
+    const readiness = await svc.getCloseReadiness(executionWorkspaceId);
+
+    expect(readiness).toMatchObject({
+      workspaceId: executionWorkspaceId,
+      state: "blocked",
+      isDestructiveCloseAllowed: false,
+    });
+    expect(readiness?.blockingReasons).toContain("A reusable environment lease still owns this workspace.");
+  });
 
   it("distinguishes stale local base branches from true unmerged worktree commits", async () => {
     const { tempRoot, repoRoot } = await createTempRemoteRepo();
@@ -875,12 +1086,22 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const projectId = randomUUID();
     const projectWorkspaceId = randomUUID();
     const executionWorkspaceId = randomUUID();
+    const runId = randomUUID();
+    const agentId = randomUUID();
 
     await db.insert(companies).values({
       id: companyId,
       name: "Paperclip",
       issuePrefix: "PAP",
       requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Backend Engineer",
+      role: "BackendEngineer",
+      status: "active",
+      systemPrompt: "test",
     });
     await db.insert(projects).values({
       id: projectId,
@@ -890,6 +1111,12 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       executionWorkspacePolicy: {
         enabled: true,
       },
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "succeeded",
     });
     await db.insert(projectWorkspaces).values({
       id: projectWorkspaceId,
@@ -918,6 +1145,17 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
         createdByRuntime: true,
       },
     });
+    await db.insert(workspaceOperations).values({
+      id: randomUUID(),
+      companyId,
+      executionWorkspaceId,
+      heartbeatRunId: runId,
+      phase: "workspace_finalize",
+      command: "workspace finalize",
+      status: "succeeded",
+      startedAt: new Date("2026-07-20T12:00:00.000Z"),
+      finishedAt: new Date("2026-07-20T12:01:00.000Z"),
+    });
 
     const readiness = await svc.getCloseReadiness(executionWorkspaceId);
 
@@ -937,8 +1175,8 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       },
     });
     expect(readiness?.warnings).not.toEqual(expect.arrayContaining([
-      "This workspace is 1 commit ahead of main and is not merged.",
-      "This workspace is 1 commit ahead of origin/main and is not merged.",
+      "This workspace is 1 commit ahead of main and is not provably merged.",
+      "This workspace is 1 commit ahead of origin/main and is not provably merged.",
     ]));
   }, 20_000);
 
@@ -971,12 +1209,22 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const projectId = randomUUID();
     const projectWorkspaceId = randomUUID();
     const executionWorkspaceId = randomUUID();
+    const runId = randomUUID();
+    const agentId = randomUUID();
 
     await db.insert(companies).values({
       id: companyId,
       name: "Paperclip",
       issuePrefix: "PAP",
       requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Backend Engineer",
+      role: "BackendEngineer",
+      status: "active",
+      systemPrompt: "test",
     });
     await db.insert(projects).values({
       id: projectId,
@@ -986,6 +1234,12 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       executionWorkspacePolicy: {
         enabled: true,
       },
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "succeeded",
     });
     await db.insert(projectWorkspaces).values({
       id: projectWorkspaceId,
@@ -1014,6 +1268,17 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
         createdByRuntime: true,
       },
     });
+    await db.insert(workspaceOperations).values({
+      id: randomUUID(),
+      companyId,
+      executionWorkspaceId,
+      heartbeatRunId: runId,
+      phase: "workspace_finalize",
+      command: "workspace finalize",
+      status: "succeeded",
+      startedAt: new Date("2026-07-20T12:00:00.000Z"),
+      finishedAt: new Date("2026-07-20T12:01:00.000Z"),
+    });
 
     const readiness = await svc.getCloseReadiness(executionWorkspaceId);
 
@@ -1033,8 +1298,8 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       },
     });
     expect(readiness?.warnings).not.toEqual(expect.arrayContaining([
-      "This workspace is 1 commit ahead of release/2026.07 and is not merged.",
-      "This workspace is 1 commit ahead of origin/release/2026.07 and is not merged.",
+      "This workspace is 1 commit ahead of release/2026.07 and is not provably merged.",
+      "This workspace is 1 commit ahead of origin/release/2026.07 and is not provably merged.",
     ]));
   }, 20_000);
 });

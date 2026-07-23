@@ -127,4 +127,62 @@ describe.sequential("execution workspace routes", () => {
     expect(res.status).toBe(422);
     expect(mockExecutionWorkspaceService.listOverview).not.toHaveBeenCalled();
   });
+
+  it("returns 409 closeReadiness before archive cleanup when destructive close is blocked", async () => {
+    mockExecutionWorkspaceService.getById.mockResolvedValue({
+      id: "workspace-1",
+      companyId: "company-1",
+      status: "active",
+      metadata: null,
+    });
+    mockExecutionWorkspaceService.getCloseReadiness.mockResolvedValue({
+      workspaceId: "workspace-1",
+      state: "blocked",
+      blockingReasons: ["The workspace has 1 untracked file."],
+      warnings: [],
+      linkedIssues: [],
+      plannedActions: [
+        {
+          kind: "git_worktree_remove",
+          label: "Remove git worktree",
+          description: "Paperclip will run git worktree cleanup.",
+          command: "git worktree remove --force /tmp/workspace-1",
+        },
+      ],
+      isDestructiveCloseAllowed: false,
+      isSharedWorkspace: false,
+      isProjectPrimaryWorkspace: false,
+      git: {
+        repoRoot: "/tmp/repo",
+        workspacePath: "/tmp/workspace-1",
+        branchName: "feature/test",
+        baseRef: "main",
+        hasDirtyTrackedFiles: false,
+        hasUntrackedFiles: true,
+        dirtyEntryCount: 0,
+        untrackedEntryCount: 1,
+        aheadCount: 0,
+        behindCount: 0,
+        isMergedIntoBase: true,
+        createdByRuntime: true,
+      },
+      runtimeServices: [],
+    });
+
+    const res = await request(createApp())
+      .patch("/api/execution-workspaces/workspace-1")
+      .send({ status: "archived" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: "The workspace has 1 untracked file.",
+      closeReadiness: {
+        workspaceId: "workspace-1",
+        state: "blocked",
+        blockingReasons: ["The workspace has 1 untracked file."],
+      },
+    });
+    expect(mockExecutionWorkspaceService.getCloseReadiness).toHaveBeenCalledWith("workspace-1");
+    expect(mockExecutionWorkspaceService.update).not.toHaveBeenCalled();
+  });
 });

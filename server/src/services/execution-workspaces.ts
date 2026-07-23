@@ -4,7 +4,16 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { executionWorkspaces, issues, projects, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
+import {
+  environmentLeases,
+  executionWorkspaces,
+  heartbeatRuns,
+  issues,
+  projects,
+  projectWorkspaces,
+  workspaceOperations,
+  workspaceRuntimeServices,
+} from "@paperclipai/db";
 import type {
   ExecutionWorkspace,
   ExecutionWorkspaceSummary,
@@ -32,6 +41,8 @@ type ExecutionWorkspaceRow = typeof executionWorkspaces.$inferSelect;
 type WorkspaceRuntimeServiceRow = typeof workspaceRuntimeServices.$inferSelect;
 const execFileAsync = promisify(execFile);
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
+const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
+const REUSABLE_LEASE_BLOCKING_STATUSES = ["active", "pending_cleanup"] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -280,6 +291,42 @@ async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<
       createdByRuntime,
     },
     warnings,
+  };
+}
+
+async function getLatestWorkspaceOperationProof(
+  db: Db,
+  companyId: string,
+  executionWorkspaceId: string,
+): Promise<{
+  latestOperation: {
+    phase: string;
+    status: string;
+    startedAt: Date;
+  } | null;
+  hasSuccessfulFinalizeProof: boolean;
+}> {
+  const latestOperation = await db
+    .select({
+      phase: workspaceOperations.phase,
+      status: workspaceOperations.status,
+      startedAt: workspaceOperations.startedAt,
+    })
+    .from(workspaceOperations)
+    .where(
+      and(
+        eq(workspaceOperations.companyId, companyId),
+        eq(workspaceOperations.executionWorkspaceId, executionWorkspaceId),
+      ),
+    )
+    .orderBy(desc(workspaceOperations.startedAt))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+
+  return {
+    latestOperation,
+    hasSuccessfulFinalizeProof:
+      latestOperation?.phase === "workspace_finalize" && latestOperation.status === "succeeded",
   };
 }
 
@@ -855,6 +902,35 @@ export function executionWorkspaceService(db: Db) {
         .from(issues)
         .where(and(eq(issues.companyId, workspace.companyId), eq(issues.executionWorkspaceId, workspace.id)));
 
+      const liveRunRows = await db
+        .select({
+          issueId: issues.id,
+        })
+        .from(issues)
+        .innerJoin(heartbeatRuns, eq(issues.executionRunId, heartbeatRuns.id))
+        .where(
+          and(
+            eq(issues.companyId, workspace.companyId),
+            eq(issues.executionWorkspaceId, workspace.id),
+            inArray(heartbeatRuns.status, LIVE_HEARTBEAT_RUN_STATUSES as unknown as string[]),
+          ),
+        );
+
+      const reusableLeaseRows = await db
+        .select({
+          id: environmentLeases.id,
+          status: environmentLeases.status,
+        })
+        .from(environmentLeases)
+        .where(
+          and(
+            eq(environmentLeases.companyId, workspace.companyId),
+            eq(environmentLeases.executionWorkspaceId, workspace.id),
+            eq(environmentLeases.leasePolicy, "reuse_by_environment"),
+            inArray(environmentLeases.status, REUSABLE_LEASE_BLOCKING_STATUSES as unknown as string[]),
+          ),
+        );
+
       const projectWorkspace = workspace.projectWorkspaceId
         ? await db
             .select({
@@ -902,6 +978,7 @@ export function executionWorkspaceService(db: Db) {
       const executionWorkspace = toExecutionWorkspace(workspace, runtimeServices);
       const config = readExecutionWorkspaceConfig((workspace.metadata as Record<string, unknown> | null) ?? null);
       const { git, warnings: gitWarnings } = await inspectGitCloseReadiness(executionWorkspace);
+      const finalizeProof = await getLatestWorkspaceOperationProof(db, workspace.companyId, workspace.id);
       const warnings = [...gitWarnings];
       const blockingReasons: string[] = [];
       const isSharedWorkspace = executionWorkspace.mode === "shared_workspace";
@@ -919,60 +996,6 @@ export function executionWorkspaceService(db: Db) {
         ...issue,
         isTerminal: TERMINAL_ISSUE_STATUSES.has(issue.status),
       }));
-
-      const blockingIssues = linkedIssueSummaries.filter((issue) => !issue.isTerminal);
-      if (blockingIssues.length > 0) {
-        const linkedIssueMessage =
-          blockingIssues.length === 1
-            ? "This workspace is still linked to an open issue."
-            : `This workspace is still linked to ${blockingIssues.length} open issues.`;
-        if (isSharedWorkspace) {
-          warnings.push(`${linkedIssueMessage} Archiving it will detach this shared workspace session from those issues, but keep the underlying project workspace available.`);
-        } else {
-          blockingReasons.push(linkedIssueMessage);
-        }
-      }
-
-      if (isSharedWorkspace) {
-        warnings.push("This shared workspace session points at project workspace infrastructure. Archiving it only removes the session record.");
-      }
-
-      if (runtimeServices.some((service) => service.status !== "stopped")) {
-        warnings.push(
-          runtimeServices.length === 1
-            ? "Closing this workspace will stop 1 attached runtime service."
-            : `Closing this workspace will stop ${runtimeServices.length} attached runtime services.`,
-        );
-      }
-
-      if (git?.hasDirtyTrackedFiles) {
-        warnings.push(
-          git.dirtyEntryCount === 1
-            ? "The workspace has 1 modified tracked file."
-            : `The workspace has ${git.dirtyEntryCount} modified tracked files.`,
-        );
-      }
-      if (git?.hasUntrackedFiles) {
-        warnings.push(
-          git.untrackedEntryCount === 1
-            ? "The workspace has 1 untracked file."
-            : `The workspace has ${git.untrackedEntryCount} untracked files.`,
-        );
-      }
-      if (git?.aheadCount && git.aheadCount > 0 && git.isMergedIntoBase === false) {
-        warnings.push(
-          git.aheadCount === 1
-            ? `This workspace is 1 commit ahead of ${git.baseRef ?? "the base ref"} and is not merged.`
-            : `This workspace is ${git.aheadCount} commits ahead of ${git.baseRef ?? "the base ref"} and is not merged.`,
-        );
-      }
-      if (git?.behindCount && git.behindCount > 0) {
-        warnings.push(
-          git.behindCount === 1
-            ? `This workspace is 1 commit behind ${git.baseRef ?? "the base ref"}.`
-            : `This workspace is ${git.behindCount} commits behind ${git.baseRef ?? "the base ref"}.`,
-        );
-      }
 
       const plannedActions: ExecutionWorkspaceCloseAction[] = [
         {
@@ -1060,6 +1083,112 @@ export function executionWorkspaceService(db: Db) {
             description: `Paperclip will remove the runtime-created directory at ${workspacePath}.`,
             command: `rm -rf ${workspacePath}`,
           });
+        }
+      }
+
+      const hasDestructiveRetirement = plannedActions.some((action) =>
+        action.kind === "git_worktree_remove"
+        || action.kind === "git_branch_delete"
+        || action.kind === "remove_local_directory"
+      );
+
+      const blockingIssues = linkedIssueSummaries.filter((issue) => !issue.isTerminal);
+      if (blockingIssues.length > 0) {
+        const linkedIssueMessage =
+          blockingIssues.length === 1
+            ? "This workspace is still linked to an open issue."
+            : `This workspace is still linked to ${blockingIssues.length} open issues.`;
+        if (isSharedWorkspace) {
+          warnings.push(`${linkedIssueMessage} Archiving it will detach this shared workspace session from those issues, but keep the underlying project workspace available.`);
+        } else {
+          blockingReasons.push(linkedIssueMessage);
+        }
+      }
+
+      const liveRunCount = liveRunRows.length;
+      if (liveRunCount > 0) {
+        const liveRunMessage =
+          liveRunCount === 1
+            ? "A live heartbeat run still owns this workspace."
+            : `${liveRunCount} live heartbeat runs still own this workspace.`;
+        if (hasDestructiveRetirement) {
+          blockingReasons.push(liveRunMessage);
+        } else {
+          warnings.push(liveRunMessage);
+        }
+      }
+
+      const reusableLeaseCount = reusableLeaseRows.length;
+      if (reusableLeaseCount > 0) {
+        const reusableLeaseMessage =
+          reusableLeaseCount === 1
+            ? "A reusable environment lease still owns this workspace."
+            : `${reusableLeaseCount} reusable environment leases still own this workspace.`;
+        if (hasDestructiveRetirement) {
+          blockingReasons.push(reusableLeaseMessage);
+        } else {
+          warnings.push(reusableLeaseMessage);
+        }
+      }
+
+      if (isSharedWorkspace) {
+        warnings.push("This shared workspace session points at project workspace infrastructure. Archiving it only removes the session record.");
+      }
+
+      if (runtimeServices.some((service) => service.status !== "stopped")) {
+        warnings.push(
+          runtimeServices.length === 1
+            ? "Closing this workspace will stop 1 attached runtime service."
+            : `Closing this workspace will stop ${runtimeServices.length} attached runtime services.`,
+        );
+      }
+
+      if (git?.hasDirtyTrackedFiles) {
+        const dirtyTrackedMessage =
+          git.dirtyEntryCount === 1
+            ? "The workspace has 1 modified tracked file."
+            : `The workspace has ${git.dirtyEntryCount} modified tracked files.`;
+        if (hasDestructiveRetirement) {
+          blockingReasons.push(dirtyTrackedMessage);
+        } else {
+          warnings.push(dirtyTrackedMessage);
+        }
+      }
+      if (git?.hasUntrackedFiles) {
+        const untrackedMessage =
+          git.untrackedEntryCount === 1
+            ? "The workspace has 1 untracked file."
+            : `The workspace has ${git.untrackedEntryCount} untracked files.`;
+        if (hasDestructiveRetirement) {
+          blockingReasons.push(untrackedMessage);
+        } else {
+          warnings.push(untrackedMessage);
+        }
+      }
+      if (git?.aheadCount && git.aheadCount > 0 && git.isMergedIntoBase !== true) {
+        const aheadUnmergedMessage =
+          git.aheadCount === 1
+            ? `This workspace is 1 commit ahead of ${git.baseRef ?? "the base ref"} and is not provably merged.`
+            : `This workspace is ${git.aheadCount} commits ahead of ${git.baseRef ?? "the base ref"} and is not provably merged.`;
+        if (hasDestructiveRetirement) {
+          blockingReasons.push(aheadUnmergedMessage);
+        } else {
+          warnings.push(aheadUnmergedMessage);
+        }
+      }
+      if (git?.behindCount && git.behindCount > 0) {
+        warnings.push(
+          git.behindCount === 1
+            ? `This workspace is 1 commit behind ${git.baseRef ?? "the base ref"}.`
+            : `This workspace is ${git.behindCount} commits behind ${git.baseRef ?? "the base ref"}.`,
+        );
+      }
+
+      if (hasDestructiveRetirement && !finalizeProof.hasSuccessfulFinalizeProof) {
+        if (finalizeProof.latestOperation?.phase === "workspace_finalize" && finalizeProof.latestOperation.status === "failed") {
+          blockingReasons.push("The latest workspace finalize failed, so Paperclip cannot prove this workspace synced back safely.");
+        } else {
+          blockingReasons.push("Paperclip cannot prove a successful workspace finalize after the most recent workspace run.");
         }
       }
 
