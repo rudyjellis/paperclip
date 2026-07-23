@@ -105,6 +105,26 @@ async function runGit(args: string[], cwd: string) {
   return await execFileAsync("git", ["-C", cwd, ...args], { cwd });
 }
 
+async function resolveCanonicalGeneratedCleanupPath(value: string | null): Promise<string | null> {
+  const workspacePath = readNullableString(value);
+  if (!workspacePath) return null;
+
+  const resolvedPath = path.resolve(workspacePath);
+  let canonicalPath = resolvedPath;
+  try {
+    canonicalPath = await fs.realpath(resolvedPath);
+  } catch {
+    canonicalPath = resolvedPath;
+  }
+
+  try {
+    const repoRoot = (await runGit(["rev-parse", "--show-toplevel"], canonicalPath)).stdout.trim();
+    return repoRoot ? path.resolve(repoRoot) : canonicalPath;
+  } catch {
+    return canonicalPath;
+  }
+}
+
 function normalizeRemoteTrackingRef(ref: string) {
   const trimmed = ref.trim();
   const refsRemotesPrefix = "refs/remotes/";
@@ -1041,23 +1061,36 @@ export function executionWorkspaceService(db: Db) {
         ),
       );
       const now = options?.now ?? new Date();
-
-      const inventoryItems = await Promise.all(workspaces.map(async (workspace) => {
+      const workspaceCleanupTargets = await Promise.all(workspaces.map(async (workspace) => {
+        const workspacePath = readNullableString(workspace.providerRef) ?? readNullableString(workspace.cwd);
+        return {
+          workspace,
+          workspacePath,
+          generatedCleanupKey: await resolveCanonicalGeneratedCleanupPath(workspacePath),
+        };
+      }));
+      const generatedCleanupByKey = new Map<string, WorkspaceGeneratedCleanupInventory>();
+      const inventoryItems = await Promise.all(workspaceCleanupTargets.map(async ({ workspace, workspacePath, generatedCleanupKey }) => {
         const readiness = await service.getCloseReadiness(workspace.id);
         if (!readiness) {
           throw new Error(`Execution workspace ${workspace.id} disappeared during cleanup inventory generation.`);
         }
 
-        const workspacePath = readNullableString(workspace.providerRef) ?? readNullableString(workspace.cwd);
-        const generatedCleanup = buildGeneratedCleanupInventory({
-          path: workspacePath,
-          branchName: workspace.branchName,
-          minAgeHours: options?.minAgeHours,
-          maxDepth: options?.maxDepth,
-          now,
-          checkLiveProcesses: options?.checkLiveProcesses,
-          liveProcessCwdChecker: options?.liveProcessCwdChecker,
-        });
+        let generatedCleanup = generatedCleanupKey ? generatedCleanupByKey.get(generatedCleanupKey) : undefined;
+        if (!generatedCleanup) {
+          generatedCleanup = buildGeneratedCleanupInventory({
+            path: workspacePath,
+            branchName: workspace.branchName,
+            minAgeHours: options?.minAgeHours,
+            maxDepth: options?.maxDepth,
+            now,
+            checkLiveProcesses: options?.checkLiveProcesses,
+            liveProcessCwdChecker: options?.liveProcessCwdChecker,
+          });
+          if (generatedCleanupKey) {
+            generatedCleanupByKey.set(generatedCleanupKey, generatedCleanup);
+          }
+        }
         const retirement = buildRetirementInventory(readiness);
         const nonTerminalLinkedIssueCount = readiness.linkedIssues.filter((issue) => !issue.isTerminal).length;
 
@@ -1080,6 +1113,33 @@ export function executionWorkspaceService(db: Db) {
           retirement,
         };
       }));
+      const countedGeneratedCleanupKeys = new Set<string>();
+      const generatedCleanupSummary = inventoryItems.reduce(
+        (summary, item, index) => {
+          const generatedCleanupKey = workspaceCleanupTargets[index]?.generatedCleanupKey ?? null;
+          if (generatedCleanupKey) {
+            if (countedGeneratedCleanupKeys.has(generatedCleanupKey)) {
+              return summary;
+            }
+            countedGeneratedCleanupKeys.add(generatedCleanupKey);
+          }
+
+          if (item.generatedCleanup.state === "eligible") {
+            summary.generatedCleanupEligible += 1;
+          } else {
+            summary.generatedCleanupBlocked += 1;
+          }
+          summary.reclaimableBytes += item.generatedCleanup.reclaimableBytes;
+          summary.reclaimableCandidateCount += item.generatedCleanup.eligibleCandidateCount;
+          return summary;
+        },
+        {
+          generatedCleanupEligible: 0,
+          generatedCleanupBlocked: 0,
+          reclaimableBytes: 0,
+          reclaimableCandidateCount: 0,
+        },
+      );
 
       return {
         generatedAt: now.toISOString(),
@@ -1088,12 +1148,12 @@ export function executionWorkspaceService(db: Db) {
         maxDepth: options?.maxDepth ?? 6,
         summary: {
           totalWorkspaces: inventoryItems.length,
-          generatedCleanupEligible: inventoryItems.filter((item) => item.generatedCleanup.state === "eligible").length,
-          generatedCleanupBlocked: inventoryItems.filter((item) => item.generatedCleanup.state === "blocked").length,
+          generatedCleanupEligible: generatedCleanupSummary.generatedCleanupEligible,
+          generatedCleanupBlocked: generatedCleanupSummary.generatedCleanupBlocked,
           retirementEligible: inventoryItems.filter((item) => item.retirement.state === "eligible").length,
           retirementBlocked: inventoryItems.filter((item) => item.retirement.state === "blocked").length,
-          reclaimableBytes: inventoryItems.reduce((total, item) => total + item.generatedCleanup.reclaimableBytes, 0),
-          reclaimableCandidateCount: inventoryItems.reduce((total, item) => total + item.generatedCleanup.eligibleCandidateCount, 0),
+          reclaimableBytes: generatedCleanupSummary.reclaimableBytes,
+          reclaimableCandidateCount: generatedCleanupSummary.reclaimableCandidateCount,
         },
         workspaces: inventoryItems,
       };

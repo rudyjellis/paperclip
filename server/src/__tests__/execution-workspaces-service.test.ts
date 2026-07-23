@@ -1293,6 +1293,166 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     );
   }, 20_000);
 
+  it("dedupes generated cleanup summary counts when multiple workspaces share one checkout path", async () => {
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const agentId = randomUUID();
+    const succeededRunId = randomUUID();
+    const primaryWorkspaceId = randomUUID();
+    const duplicateWorkspaceId = randomUUID();
+    const sharedRepo = await createCleanupInventoryRepo("paperclip/shared-checkout");
+    tempDirs.add(sharedRepo);
+
+    await fs.mkdir(path.join(sharedRepo, "node_modules", "pkg"), { recursive: true });
+    await fs.writeFile(path.join(sharedRepo, "node_modules", "pkg", "index.js"), "module.exports = 1;\n", "utf8");
+    await fs.mkdir(path.join(sharedRepo, "dist"), { recursive: true });
+    await fs.writeFile(path.join(sharedRepo, "dist", "bundle.js"), "console.log('built');\n", "utf8");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Backend Engineer",
+      role: "BackendEngineer",
+      status: "active",
+      systemPrompt: "test",
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Cleanup inventory duplicates",
+      status: "in_progress",
+      executionWorkspacePolicy: {
+        enabled: true,
+      },
+    });
+    await db.insert(heartbeatRuns).values({
+      id: succeededRunId,
+      companyId,
+      agentId,
+      status: "succeeded",
+    });
+    await db.insert(executionWorkspaces).values([
+      {
+        id: primaryWorkspaceId,
+        companyId,
+        projectId,
+        mode: "shared_workspace",
+        strategyType: "project_primary",
+        name: "Primary shared checkout",
+        status: "active",
+        providerType: "local_fs",
+        cwd: sharedRepo,
+        providerRef: sharedRepo,
+        branchName: "paperclip/shared-checkout",
+        baseRef: "main",
+        metadata: {
+          createdByRuntime: true,
+        },
+      },
+      {
+        id: duplicateWorkspaceId,
+        companyId,
+        projectId,
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        name: "Duplicate shared checkout",
+        status: "active",
+        providerType: "git_worktree",
+        cwd: sharedRepo,
+        providerRef: sharedRepo,
+        branchName: "paperclip/shared-checkout",
+        baseRef: "main",
+        metadata: {
+          createdByRuntime: true,
+        },
+      },
+    ]);
+    await db.insert(workspaceOperations).values([
+      {
+        id: randomUUID(),
+        companyId,
+        executionWorkspaceId: primaryWorkspaceId,
+        heartbeatRunId: succeededRunId,
+        phase: "workspace_finalize",
+        command: "workspace finalize",
+        status: "succeeded",
+        startedAt: new Date("2026-07-23T10:00:00.000Z"),
+        finishedAt: new Date("2026-07-23T10:01:00.000Z"),
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        executionWorkspaceId: duplicateWorkspaceId,
+        heartbeatRunId: succeededRunId,
+        phase: "workspace_finalize",
+        command: "workspace finalize",
+        status: "succeeded",
+        startedAt: new Date("2026-07-23T10:02:00.000Z"),
+        finishedAt: new Date("2026-07-23T10:03:00.000Z"),
+      },
+    ]);
+    await db.insert(issues).values({
+      id: randomUUID(),
+      companyId,
+      projectId,
+      title: "Still open on duplicate row",
+      status: "todo",
+      priority: "medium",
+      executionWorkspaceId: duplicateWorkspaceId,
+    });
+
+    const inventory = await svc.listCleanupInventory(companyId, {
+      minAgeHours: 0,
+      checkLiveProcesses: false,
+      now: new Date("2026-07-23T12:00:00.000Z"),
+    });
+    const byName = new Map(inventory.workspaces.map((workspace) => [workspace.workspaceName, workspace]));
+    const primary = byName.get("Primary shared checkout");
+    const duplicate = byName.get("Duplicate shared checkout");
+
+    expect(inventory.summary).toMatchObject({
+      totalWorkspaces: 2,
+      generatedCleanupEligible: 1,
+      generatedCleanupBlocked: 0,
+      retirementEligible: 1,
+      retirementBlocked: 1,
+      reclaimableCandidateCount: 2,
+    });
+    expect(primary?.generatedCleanup.reclaimableBytes).toBeGreaterThan(0);
+    expect(duplicate?.generatedCleanup.reclaimableBytes).toBe(primary?.generatedCleanup.reclaimableBytes);
+    expect(inventory.summary.reclaimableBytes).toBe(primary?.generatedCleanup.reclaimableBytes);
+
+    expect(primary).toMatchObject({
+      linkedIssueCount: 0,
+      nonTerminalLinkedIssueCount: 0,
+      generatedCleanup: {
+        state: "eligible",
+        eligibleCandidateCount: 2,
+      },
+      retirement: {
+        state: "eligible",
+      },
+    });
+    expect(duplicate).toMatchObject({
+      linkedIssueCount: 1,
+      nonTerminalLinkedIssueCount: 1,
+      generatedCleanup: {
+        state: "eligible",
+        eligibleCandidateCount: 2,
+      },
+      retirement: {
+        state: "blocked",
+      },
+    });
+    expect(duplicate?.retirement.reasons).toContain("This workspace is still linked to an open issue.");
+  }, 20_000);
+
   it("distinguishes stale local base branches from true unmerged worktree commits", async () => {
     const { tempRoot, repoRoot } = await createTempRemoteRepo();
     tempDirs.add(tempRoot);
