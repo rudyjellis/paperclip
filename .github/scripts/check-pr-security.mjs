@@ -312,15 +312,18 @@ export async function postSecurityCheckRun(fetchImpl, token, repo, headSha, hasF
       name: 'security-review',
       head_sha: headSha,
       // `completed/neutral` instead of `in_progress` so the check doesn't put
-      // the PR in `mergeStateStatus: BLOCKED`. The draft advisory is the
-      // durable signal for maintainers; there is no completion path that
-      // could ever flip an `in_progress` check-run back to completed on the
-      // same head SHA, so it would hang forever.
+      // the PR in `mergeStateStatus: BLOCKED`. This completed check is the
+      // durable reviewer-visible signal, and when repository advisories are
+      // available the draft advisory supplements it for maintainer follow-up.
+      // There is no completion path that could ever flip an `in_progress`
+      // check-run back to completed on the same head SHA, so it would hang
+      // forever.
       status: 'completed',
       conclusion: 'neutral',
       output: {
         title: 'Security Review Recommended',
-        summary: 'Draft advisory filed for maintainer review. Not a merge block — review the advisory at your leisure.',
+        summary:
+          'Security-sensitive changes detected. Draft advisories are filed when repository permissions allow; otherwise this check remains the maintainer-visible signal. Not a merge block.',
       },
     } : {
       name: 'security-review',
@@ -404,7 +407,9 @@ async function main() {
   ];
 
   if (allFlags.length > 0) {
-    console.error(`[security] ${allFlags.length} flag(s) detected — creating draft advisory and pending check run`);
+    console.error(
+      `[security] ${allFlags.length} flag(s) detected — attempting draft advisory sync and posting reviewer-visible check run`,
+    );
     await Promise.all([
       syncDraftAdvisoryBestEffort(ghFetch, GH_TOKEN, GH_REPO, prNumber, pr.title, allFlags),
       postSecurityCheckRun(ghFetch, GH_TOKEN, GH_REPO, pr.head.sha, true),

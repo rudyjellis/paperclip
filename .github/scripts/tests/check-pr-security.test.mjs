@@ -218,7 +218,8 @@ test('postSecurityCheckRun: uses the injected fetch implementation', async () =>
     conclusion: 'neutral',
     output: {
       title: 'Security Review Recommended',
-      summary: 'Draft advisory filed for maintainer review. Not a merge block — review the advisory at your leisure.',
+      summary:
+        'Security-sensitive changes detected. Draft advisories are filed when repository permissions allow; otherwise this check remains the maintainer-visible signal. Not a merge block.',
     },
   });
 });
