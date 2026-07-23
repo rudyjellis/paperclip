@@ -326,8 +326,7 @@ async function getLatestWorkspaceOperationProof(
   return {
     latestOperation,
     hasSuccessfulFinalizeProof:
-      latestOperation === null
-      || (latestOperation.phase === "workspace_finalize" && latestOperation.status === "succeeded"),
+      latestOperation?.phase === "workspace_finalize" && latestOperation.status === "succeeded",
   };
 }
 

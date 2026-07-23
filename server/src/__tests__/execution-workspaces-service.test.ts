@@ -935,6 +935,56 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     );
   });
 
+  it("blocks destructive close when no workspace finalize proof exists", async () => {
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const executionWorkspaceId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: "PAP",
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Missing finalize proof",
+      status: "in_progress",
+      executionWorkspacePolicy: {
+        enabled: true,
+      },
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId,
+      projectId,
+      mode: "isolated_workspace",
+      strategyType: "git_worktree",
+      name: "Missing finalize proof workspace",
+      status: "active",
+      providerType: "git_worktree",
+      cwd: "/tmp/missing-finalize-proof-workspace",
+      providerRef: "/tmp/missing-finalize-proof-workspace",
+      branchName: "paperclip/missing-finalize-proof",
+      baseRef: "master",
+      metadata: {
+        createdByRuntime: true,
+      },
+    });
+
+    const readiness = await svc.getCloseReadiness(executionWorkspaceId);
+
+    expect(readiness).toMatchObject({
+      workspaceId: executionWorkspaceId,
+      state: "blocked",
+      isDestructiveCloseAllowed: false,
+    });
+    expect(readiness?.blockingReasons).toContain(
+      "Paperclip cannot prove a successful workspace finalize after the most recent workspace run.",
+    );
+  });
+
   it("blocks destructive close when a reusable environment lease still owns the workspace", async () => {
     const companyId = randomUUID();
     const projectId = randomUUID();
@@ -1036,12 +1086,22 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const projectId = randomUUID();
     const projectWorkspaceId = randomUUID();
     const executionWorkspaceId = randomUUID();
+    const runId = randomUUID();
+    const agentId = randomUUID();
 
     await db.insert(companies).values({
       id: companyId,
       name: "Paperclip",
       issuePrefix: "PAP",
       requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Backend Engineer",
+      role: "BackendEngineer",
+      status: "active",
+      systemPrompt: "test",
     });
     await db.insert(projects).values({
       id: projectId,
@@ -1051,6 +1111,12 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       executionWorkspacePolicy: {
         enabled: true,
       },
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "succeeded",
     });
     await db.insert(projectWorkspaces).values({
       id: projectWorkspaceId,
@@ -1078,6 +1144,17 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       metadata: {
         createdByRuntime: true,
       },
+    });
+    await db.insert(workspaceOperations).values({
+      id: randomUUID(),
+      companyId,
+      executionWorkspaceId,
+      heartbeatRunId: runId,
+      phase: "workspace_finalize",
+      command: "workspace finalize",
+      status: "succeeded",
+      startedAt: new Date("2026-07-20T12:00:00.000Z"),
+      finishedAt: new Date("2026-07-20T12:01:00.000Z"),
     });
 
     const readiness = await svc.getCloseReadiness(executionWorkspaceId);
@@ -1132,12 +1209,22 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const projectId = randomUUID();
     const projectWorkspaceId = randomUUID();
     const executionWorkspaceId = randomUUID();
+    const runId = randomUUID();
+    const agentId = randomUUID();
 
     await db.insert(companies).values({
       id: companyId,
       name: "Paperclip",
       issuePrefix: "PAP",
       requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Backend Engineer",
+      role: "BackendEngineer",
+      status: "active",
+      systemPrompt: "test",
     });
     await db.insert(projects).values({
       id: projectId,
@@ -1147,6 +1234,12 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       executionWorkspacePolicy: {
         enabled: true,
       },
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "succeeded",
     });
     await db.insert(projectWorkspaces).values({
       id: projectWorkspaceId,
@@ -1174,6 +1267,17 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       metadata: {
         createdByRuntime: true,
       },
+    });
+    await db.insert(workspaceOperations).values({
+      id: randomUUID(),
+      companyId,
+      executionWorkspaceId,
+      heartbeatRunId: runId,
+      phase: "workspace_finalize",
+      command: "workspace finalize",
+      status: "succeeded",
+      startedAt: new Date("2026-07-20T12:00:00.000Z"),
+      finishedAt: new Date("2026-07-20T12:01:00.000Z"),
     });
 
     const readiness = await svc.getCloseReadiness(executionWorkspaceId);
