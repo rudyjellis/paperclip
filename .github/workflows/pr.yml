@@ -193,6 +193,7 @@ jobs:
           lockfile_path="$(find "${{ steps.download_pr_lockfile.outputs.download-path }}" -type f -name 'pnpm-lock.yaml' -print -quit)"
           test -n "$lockfile_path"
           cp "$lockfile_path" pnpm-lock.yaml
+          rm -rf "${{ steps.download_pr_lockfile.outputs.download-path }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -260,6 +261,7 @@ jobs:
           lockfile_path="$(find "${{ steps.download_pr_lockfile.outputs.download-path }}" -type f -name 'pnpm-lock.yaml' -print -quit)"
           test -n "$lockfile_path"
           cp "$lockfile_path" pnpm-lock.yaml
+          rm -rf "${{ steps.download_pr_lockfile.outputs.download-path }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -318,6 +320,7 @@ jobs:
           lockfile_path="$(find "${{ steps.download_pr_lockfile.outputs.download-path }}" -type f -name 'pnpm-lock.yaml' -print -quit)"
           test -n "$lockfile_path"
           cp "$lockfile_path" pnpm-lock.yaml
+          rm -rf "${{ steps.download_pr_lockfile.outputs.download-path }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -360,6 +363,7 @@ jobs:
           lockfile_path="$(find "${{ steps.download_pr_lockfile.outputs.download-path }}" -type f -name 'pnpm-lock.yaml' -print -quit)"
           test -n "$lockfile_path"
           cp "$lockfile_path" pnpm-lock.yaml
+          rm -rf "${{ steps.download_pr_lockfile.outputs.download-path }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -422,6 +426,7 @@ jobs:
           lockfile_path="$(find "${{ steps.download_pr_lockfile.outputs.download-path }}" -type f -name 'pnpm-lock.yaml' -print -quit)"
           test -n "$lockfile_path"
           cp "$lockfile_path" pnpm-lock.yaml
+          rm -rf "${{ steps.download_pr_lockfile.outputs.download-path }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
