@@ -60,6 +60,7 @@ import {
   issueCommentAuthorTypeSchema,
   issueCommentMetadataSchema,
   issueCommentPresentationSchema,
+  isAgentInvokable,
   isUuidLike,
   normalizeIssueIdentifier as normalizeIssueReferenceIdentifier,
 } from "@paperclipai/shared";
@@ -1764,8 +1765,6 @@ function lowTrustBoundaryIssueCondition(
 const BLOCKER_ATTENTION_OPEN_RECOVERY_TERMINAL_STATUSES = ["done", "cancelled"];
 const BLOCKER_ATTENTION_MAX_DEPTH = 8;
 const BLOCKER_ATTENTION_MAX_NODES = 2000;
-const BLOCKER_ATTENTION_INVOKABLE_AGENT_STATUSES = new Set(["active", "idle", "running", "error"]);
-
 type IssueBlockerAttentionNode = {
   id: string;
   companyId: string;
@@ -1813,7 +1812,9 @@ type IssueBlockerAttentionActivePathRow = {
 type IssueBlockerAttentionAgentRow = {
   id: string;
   companyId: string;
+  name: string;
   status: string;
+  reportsTo: string | null;
 };
 
 async function activeRunMapForIssues(
@@ -2422,10 +2423,14 @@ async function listIssueBlockerAttentionMap(
         .select({
           id: agents.id,
           companyId: agents.companyId,
+          name: agents.name,
           status: agents.status,
+          reportsTo: agents.reportsTo,
         })
         .from(agents)
-        .where(and(eq(agents.companyId, companyId), inArray(agents.id, [...agentIds])))
+        // Canonical invokability depends on the complete reporting chain. Load
+        // the company tree once instead of resolving ancestors per blocker.
+        .where(eq(agents.companyId, companyId))
     : [];
   const agentsById = new Map(agentRows.map((agent) => [agent.id, agent]));
   const nowMs = Date.now();
@@ -2464,7 +2469,7 @@ async function listIssueBlockerAttentionMap(
       !node.assigneeUserId &&
       (node.status === "in_progress" || node.status === "in_review") &&
       monitorAssignee?.companyId === companyId &&
-      BLOCKER_ATTENTION_INVOKABLE_AGENT_STATUSES.has(monitorAssignee.status) &&
+      isAgentInvokable({ agent: monitorAssignee, agents: agentRows }) &&
       hasScheduledMonitorWaitingPath(node, nowMs);
     if (hasValidScheduledMonitor) {
       return { covered: true, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
@@ -2521,7 +2526,11 @@ async function listIssueBlockerAttentionMap(
 
     if (node.assigneeAgentId) {
       const assignee = agentsById.get(node.assigneeAgentId);
-      if (!assignee || assignee.companyId !== companyId || !BLOCKER_ATTENTION_INVOKABLE_AGENT_STATUSES.has(assignee.status)) {
+      if (
+        !assignee ||
+        assignee.companyId !== companyId ||
+        !isAgentInvokable({ agent: assignee, agents: agentRows })
+      ) {
         return { covered: false, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
       }
     }

@@ -218,6 +218,77 @@ describeEmbeddedPostgres("issue blocker attention", () => {
     });
   });
 
+  it("keeps a monitor covered when its assignee has a healthy reporting chain", async () => {
+    const { companyId, agentId } = await createCompany("PBMH");
+    const managerId = randomUUID();
+    await db.insert(agents).values({
+      id: managerId,
+      companyId,
+      name: "PBMH Manager",
+      role: "manager",
+      status: "idle",
+    });
+    await db.update(agents).set({ reportsTo: managerId }).where(eq(agents.id, agentId));
+
+    const nextCheckAt = new Date(Date.now() + 60 * 60 * 1000);
+    const parentId = await insertIssue({ companyId, identifier: "PBMH-1", title: "Parent", status: "blocked" });
+    const blockerId = await insertIssue({
+      companyId,
+      identifier: "PBMH-2",
+      title: "Monitor with healthy assignee chain",
+      status: "in_progress",
+      assigneeAgentId: agentId,
+      executionPolicy: { monitor: { nextCheckAt: nextCheckAt.toISOString(), maxAttempts: 2 } },
+      monitorNextCheckAt: nextCheckAt,
+      monitorAttemptCount: 0,
+    });
+    await block({ companyId, blockerIssueId: blockerId, blockedIssueId: parentId });
+
+    const parent = (await svc.list(companyId, { status: "blocked" })).find((issue) => issue.id === parentId);
+
+    expect(parent?.blockerAttention).toMatchObject({
+      state: "covered",
+      coveredBlockerCount: 1,
+      attentionBlockerCount: 0,
+      sampleBlockerIdentifier: "PBMH-2",
+    });
+  });
+
+  it("does not let a monitor hide an assignee whose manager belongs to another company", async () => {
+    const primary = await createCompany("PBMC");
+    const foreign = await createCompany("PBMD");
+    await db.update(agents).set({ reportsTo: foreign.agentId }).where(eq(agents.id, primary.agentId));
+
+    const nextCheckAt = new Date(Date.now() + 60 * 60 * 1000);
+    const parentId = await insertIssue({
+      companyId: primary.companyId,
+      identifier: "PBMC-1",
+      title: "Parent",
+      status: "blocked",
+    });
+    const blockerId = await insertIssue({
+      companyId: primary.companyId,
+      identifier: "PBMC-2",
+      title: "Monitor with cross-company manager",
+      status: "in_progress",
+      assigneeAgentId: primary.agentId,
+      executionPolicy: { monitor: { nextCheckAt: nextCheckAt.toISOString(), maxAttempts: 2 } },
+      monitorNextCheckAt: nextCheckAt,
+      monitorAttemptCount: 0,
+    });
+    await block({ companyId: primary.companyId, blockerIssueId: blockerId, blockedIssueId: parentId });
+
+    const parent = (await svc.list(primary.companyId, { status: "blocked" })).find((issue) => issue.id === parentId);
+
+    expect(parent?.blockerAttention).toMatchObject({
+      state: "needs_attention",
+      reason: "attention_required",
+      coveredBlockerCount: 0,
+      attentionBlockerCount: 1,
+      sampleBlockerIdentifier: "PBMC-2",
+    });
+  });
+
   it("lets a valid future monitor cover an in-review blocker without classifying it as stalled", async () => {
     const { companyId, agentId } = await createCompany("PBMR");
     const nextCheckAt = new Date(Date.now() + 60 * 60 * 1000);
