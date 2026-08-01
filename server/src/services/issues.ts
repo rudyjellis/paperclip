@@ -2455,10 +2455,18 @@ async function listIssueBlockerAttentionMap(
     if (explicitWaitingIssueIds.has(node.id)) {
       return { covered: true, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
     }
-    if (hasScheduledMonitorWaitingPath(node, nowMs)) {
+    if (node.assigneeUserId && node.status !== "cancelled") {
       return { covered: true, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
     }
-    if (node.assigneeUserId && node.status !== "cancelled") {
+    const monitorAssignee = node.assigneeAgentId ? agentsById.get(node.assigneeAgentId) : null;
+    const hasValidScheduledMonitor =
+      Boolean(node.assigneeAgentId) &&
+      !node.assigneeUserId &&
+      (node.status === "in_progress" || node.status === "in_review") &&
+      monitorAssignee?.companyId === companyId &&
+      BLOCKER_ATTENTION_INVOKABLE_AGENT_STATUSES.has(monitorAssignee.status) &&
+      hasScheduledMonitorWaitingPath(node, nowMs);
+    if (hasValidScheduledMonitor) {
       return { covered: true, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
     }
     if (node.status === "in_review") {
