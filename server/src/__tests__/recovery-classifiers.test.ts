@@ -21,6 +21,41 @@ const issueId = "issue-1";
 const blockerId = "blocker-1";
 const runId = "run-1";
 
+function executionStateWithMonitor(input: {
+  status?: "scheduled" | "triggered" | "cleared";
+  nextCheckAt?: string | null;
+}) {
+  const status = input.status ?? "scheduled";
+  return {
+    status: "idle",
+    currentStageId: null,
+    currentStageIndex: null,
+    currentStageType: null,
+    currentParticipant: null,
+    returnAssignee: null,
+    reviewRequest: null,
+    completedStageIds: [],
+    lastDecisionId: null,
+    lastDecisionOutcome: null,
+    monitor: {
+      status,
+      nextCheckAt: input.nextCheckAt ?? null,
+      lastTriggeredAt: null,
+      attemptCount: 0,
+      notes: null,
+      scheduledBy: "assignee",
+      kind: null,
+      serviceName: null,
+      externalRef: null,
+      timeoutAt: null,
+      maxAttempts: null,
+      recoveryPolicy: null,
+      clearedAt: status === "cleared" ? "2026-04-30T17:00:00.000Z" : null,
+      clearReason: status === "cleared" ? "manual" : null,
+    },
+  };
+}
+
 describe("recovery classifier boundary", () => {
   it("keeps issue graph liveness classifier parity with the compatibility export", () => {
     const input = {
@@ -102,6 +137,14 @@ describe("recovery classifier boundary", () => {
           status: "idle",
           reportsTo: managerId,
         },
+        {
+          id: managerId,
+          companyId,
+          name: "CTO",
+          role: "cto",
+          status: "idle",
+          reportsTo: null,
+        },
       ],
     });
 
@@ -166,6 +209,131 @@ describe("recovery classifier boundary", () => {
 
     expect(overdue[0]?.state).toBe("in_review_without_action_path");
     expect(exhausted[0]?.state).toBe("in_review_without_action_path");
+  });
+
+  it("fails closed when persisted monitor metadata is malformed or no longer scheduled", () => {
+    const nextCheckAt = "2026-04-30T19:00:00.000Z";
+    const baseIssue = {
+      id: issueId,
+      companyId,
+      identifier: "PAP-2945",
+      title: "Wait for external review",
+      status: "in_review",
+      assigneeAgentId: agentId,
+      assigneeUserId: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+      monitorNextCheckAt: nextCheckAt,
+      monitorAttemptCount: 0,
+    };
+    const agents = [
+      {
+        id: agentId,
+        companyId,
+        name: "Coder",
+        role: "engineer",
+        status: "idle",
+        reportsTo: managerId,
+      },
+      {
+        id: managerId,
+        companyId,
+        name: "CTO",
+        role: "cto",
+        status: "idle",
+        reportsTo: null,
+      },
+    ];
+    const cases = [
+      {
+        name: "malformed policy next-check",
+        patch: { executionPolicy: { monitor: { nextCheckAt: "not-a-date" } } },
+      },
+      {
+        name: "mismatched state next-check",
+        patch: { executionState: executionStateWithMonitor({ nextCheckAt: "2026-04-30T19:30:00.000Z" }) },
+      },
+      {
+        name: "cleared monitor state",
+        patch: { executionState: executionStateWithMonitor({ status: "cleared", nextCheckAt }) },
+      },
+      {
+        name: "max-attempts above schema bound",
+        patch: { executionPolicy: { monitor: { nextCheckAt, maxAttempts: 101 } } },
+      },
+      {
+        name: "malformed timeout",
+        patch: { executionPolicy: { monitor: { nextCheckAt, timeoutAt: "not-a-date" } } },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const findings = classifyIssueGraphLiveness({
+        now: "2026-04-30T18:00:00.000Z",
+        issues: [{ ...baseIssue, ...testCase.patch }],
+        relations: [],
+        agents,
+      });
+
+      expect(findings.length, testCase.name).toBeGreaterThan(0);
+    }
+  });
+
+  it("requires an eligible blocker status and an invokable same-company monitor assignee", () => {
+    const now = "2026-04-30T18:00:00.000Z";
+    const nextCheckAt = "2026-04-30T19:00:00.000Z";
+    const rootIssue = {
+      id: issueId,
+      companyId,
+      identifier: "PAP-2945",
+      title: "Blocked root",
+      status: "blocked",
+      assigneeAgentId: null,
+      assigneeUserId: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+    };
+    const baseBlocker = {
+      id: blockerId,
+      companyId,
+      identifier: "PAP-2946",
+      title: "Monitor-backed blocker",
+      status: "in_progress",
+      assigneeAgentId: agentId,
+      assigneeUserId: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+      monitorNextCheckAt: nextCheckAt,
+    };
+    const relation = { companyId, blockerIssueId: blockerId, blockedIssueId: issueId };
+    const cases = [
+      {
+        name: "ineligible issue status",
+        blocker: { ...baseBlocker, status: "backlog" },
+        agents: [{ id: agentId, companyId, name: "Coder", role: "engineer", status: "idle", reportsTo: null }],
+      },
+      {
+        name: "paused assignee",
+        blocker: baseBlocker,
+        agents: [{ id: agentId, companyId, name: "Coder", role: "engineer", status: "paused", reportsTo: null }],
+      },
+      {
+        name: "cross-company assignee",
+        blocker: baseBlocker,
+        agents: [{ id: agentId, companyId: "company-2", name: "Coder", role: "engineer", status: "idle", reportsTo: null }],
+      },
+    ];
+
+    for (const testCase of cases) {
+      const findings = classifyIssueGraphLiveness({
+        now,
+        issues: [rootIssue, testCase.blocker],
+        relations: [relation],
+        agents: testCase.agents,
+      });
+
+      expect(findings, testCase.name).toHaveLength(1);
+    }
   });
 
   it("keeps run liveness continuation decision parity with the compatibility export", () => {

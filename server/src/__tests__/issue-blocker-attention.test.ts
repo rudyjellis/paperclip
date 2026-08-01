@@ -312,6 +312,16 @@ describeEmbeddedPostgres("issue blocker attention", () => {
         },
       },
       {
+        suffix: "invalid-status",
+        issue: {
+          status: "todo",
+          assigneeAgentId: agentId,
+          executionPolicy: { monitor: { nextCheckAt: future.toISOString(), maxAttempts: 2 } },
+          monitorNextCheckAt: future,
+          monitorAttemptCount: 0,
+        },
+      },
+      {
         suffix: "invalid-assignee",
         issue: {
           status: "in_progress",

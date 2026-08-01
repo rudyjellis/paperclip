@@ -1,4 +1,9 @@
-import { getAgentWorkEligibility, isAgentInvokable } from "@paperclipai/shared";
+import {
+  getAgentWorkEligibility,
+  isAgentInvokable,
+  issueExecutionPolicySchema,
+  issueExecutionStateSchema,
+} from "@paperclipai/shared";
 import { buildIssueGraphLivenessIncidentKey } from "./origins.js";
 
 export type IssueLivenessSeverity = "warning" | "critical";
@@ -152,10 +157,6 @@ function readRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function readPositiveInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
-}
-
 function readDateMs(value: unknown): number | null {
   if (!(typeof value === "string" || value instanceof Date)) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -168,13 +169,19 @@ function monitorFromIssue(issue: IssueLivenessIssueInput) {
   const state = readRecord(issue.executionState);
   const rawPolicyMonitor = policy?.monitor;
   const rawStateMonitor = state?.monitor;
-  const policyMonitor = readRecord(rawPolicyMonitor);
-  const stateMonitor = readRecord(rawStateMonitor);
+  const policyMonitorResult = rawPolicyMonitor == null
+    ? null
+    : issueExecutionPolicySchema.shape.monitor.safeParse(rawPolicyMonitor);
+  const stateMonitorResult = rawStateMonitor == null
+    ? null
+    : issueExecutionStateSchema.shape.monitor.safeParse(rawStateMonitor);
   const invalidMetadata =
     (issue.executionPolicy != null && !policy) ||
     (issue.executionState != null && !state) ||
-    (rawPolicyMonitor != null && !policyMonitor) ||
-    (rawStateMonitor != null && !stateMonitor);
+    (policyMonitorResult !== null && !policyMonitorResult.success) ||
+    (stateMonitorResult !== null && !stateMonitorResult.success);
+  const policyMonitor = policyMonitorResult?.success ? policyMonitorResult.data ?? null : null;
+  const stateMonitor = stateMonitorResult?.success ? stateMonitorResult.data ?? null : null;
   return { policyMonitor, stateMonitor, invalidMetadata };
 }
 
@@ -185,26 +192,31 @@ export function hasScheduledMonitorWaitingPath(issue: IssueLivenessIssueInput, n
   const { policyMonitor, stateMonitor, invalidMetadata } = monitorFromIssue(issue);
   if (invalidMetadata) return false;
 
-  const timeoutAt = policyMonitor?.timeoutAt ?? stateMonitor?.timeoutAt;
-  const timeoutAtMs = readDateMs(timeoutAt);
-  if (timeoutAt != null && timeoutAtMs === null) return false;
-  if (timeoutAtMs !== null && timeoutAtMs <= nowMs) return false;
-
-  const rawMaxAttempts = policyMonitor?.maxAttempts ?? stateMonitor?.maxAttempts;
-  const maxAttempts = readPositiveInteger(rawMaxAttempts);
-  if (rawMaxAttempts != null && maxAttempts === null) return false;
-
-  const rawStateAttemptCount = stateMonitor?.attemptCount;
+  if (policyMonitor && readDateMs(policyMonitor.nextCheckAt) !== nextCheckAtMs) return false;
   if (
-    rawStateAttemptCount != null &&
-    (typeof rawStateAttemptCount !== "number" || !Number.isInteger(rawStateAttemptCount) || rawStateAttemptCount < 0)
+    stateMonitor &&
+    (stateMonitor.status !== "scheduled" || readDateMs(stateMonitor.nextCheckAt) !== nextCheckAtMs)
   ) {
     return false;
   }
-  const stateAttemptCount = typeof rawStateAttemptCount === "number" ? rawStateAttemptCount : 0;
-  const attemptCount = issue.monitorAttemptCount ?? stateAttemptCount;
-  if (typeof attemptCount !== "number" || !Number.isInteger(attemptCount) || attemptCount < 0) return false;
-  if (maxAttempts !== null && attemptCount >= maxAttempts) return false;
+
+  const persistedAttemptCount = issue.monitorAttemptCount;
+  if (
+    persistedAttemptCount != null &&
+    (!Number.isInteger(persistedAttemptCount) || persistedAttemptCount < 0)
+  ) {
+    return false;
+  }
+  const attemptCount = Math.max(persistedAttemptCount ?? 0, stateMonitor?.attemptCount ?? 0);
+  for (const monitor of [policyMonitor, stateMonitor]) {
+    if (!monitor) continue;
+    const timeoutAtMs = readDateMs(monitor.timeoutAt);
+    if (monitor.timeoutAt != null && timeoutAtMs === null) return false;
+    if (timeoutAtMs !== null && timeoutAtMs <= nowMs) return false;
+    if (monitor.maxAttempts !== null && monitor.maxAttempts !== undefined && attemptCount >= monitor.maxAttempts) {
+      return false;
+    }
+  }
 
   return true;
 }
@@ -424,8 +436,16 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
   }
 
   function hasExplicitWaitingPath(issue: IssueLivenessIssueInput) {
+    const monitorAssignee = issue.assigneeAgentId ? agentsById.get(issue.assigneeAgentId) : null;
+    const hasValidScheduledMonitor =
+      Boolean(issue.assigneeAgentId) &&
+      !issue.assigneeUserId &&
+      (issue.status === "in_progress" || issue.status === "in_review") &&
+      monitorAssignee?.companyId === issue.companyId &&
+      isInvokableAgent(monitorAssignee, agentsById) &&
+      hasScheduledMonitorWaitingPath(issue, nowMs);
     return Boolean(issue.assigneeUserId) ||
-      hasScheduledMonitorWaitingPath(issue, nowMs) ||
+      hasValidScheduledMonitor ||
       hasActiveExecutionPath(issue.companyId, issue.id, activeRuns, queuedWakeRequests) ||
       hasWaitingPath(issue.companyId, issue.id, pendingInteractions) ||
       hasWaitingPath(issue.companyId, issue.id, pendingApprovals) ||
