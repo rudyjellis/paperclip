@@ -116,6 +116,7 @@ import {
   buildIssueBlockersResolvedWakeIdempotencyKey,
   findExistingIssueBlockersResolvedWake,
 } from "./issue-dependency-wakeups.js";
+import { hasGitPushRemote } from "./heartbeat-git.js";
 import {
   buildIssueMonitorClearedPatch,
   buildIssueMonitorTriggeredPatch,
@@ -1345,27 +1346,6 @@ function sameResolvedPath(left: string | null | undefined, right: string | null 
   const rightPath = readNonEmptyString(right);
   if (!leftPath || !rightPath) return false;
   return path.resolve(leftPath) === path.resolve(rightPath);
-}
-
-async function hasGitPushRemote(cwd: string | null | undefined) {
-  const normalized = readNonEmptyString(cwd);
-  if (!normalized) return false;
-  const remoteNames = await execFile("git", ["remote"], { cwd: normalized })
-    .then((result) =>
-      result.stdout
-        .split(/\r?\n/)
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0),
-    )
-    .catch(() => []);
-
-  for (const remoteName of remoteNames) {
-    const pushUrl = await execFile("git", ["remote", "get-url", "--push", remoteName], { cwd: normalized })
-      .then((result) => readNonEmptyString(result.stdout))
-      .catch(() => null);
-    if (pushUrl) return true;
-  }
-  return false;
 }
 
 export async function assertPushCapabilityCheckoutValid(input: {

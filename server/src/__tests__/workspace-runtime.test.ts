@@ -239,8 +239,11 @@ afterEach(async () => {
   delete process.env.PAPERCLIP_CONFIG;
   delete process.env.PAPERCLIP_HOME;
   delete process.env.PAPERCLIP_INSTANCE_ID;
+  delete process.env.PAPERCLIP_AGENT_JWT_SECRET;
   delete process.env.PAPERCLIP_WORKTREES_DIR;
   delete process.env.DATABASE_URL;
+  delete process.env.npm_config_tailscale_auth;
+  delete process.env.npm_config_authenticated_private;
   await resetRuntimeServicesForTests();
 });
 
@@ -1074,6 +1077,125 @@ describe("realizeExecutionWorkspace", () => {
     });
 
     await expect(fs.readFile(path.join(reused.cwd, ".paperclip-provision-created"), "utf8")).resolves.toBe("false\n");
+  });
+
+  it("does not leak parent secrets into git hooks or provision commands", async () => {
+    const repoRoot = await createTempRepo();
+    const hookCapturePath = path.join(repoRoot, ".post-checkout-env.json");
+    const hooksDir = path.join(repoRoot, ".githooks");
+    const hookPath = path.join(hooksDir, "post-checkout");
+    await fs.mkdir(hooksDir, { recursive: true });
+    await fs.writeFile(
+      hookPath,
+      [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(hookCapturePath)}, JSON.stringify({`,
+        "  paperclipConfig: process.env.PAPERCLIP_CONFIG ?? null,",
+        "  paperclipHome: process.env.PAPERCLIP_HOME ?? null,",
+        "  paperclipInstanceId: process.env.PAPERCLIP_INSTANCE_ID ?? null,",
+        "  paperclipWorktreesDir: process.env.PAPERCLIP_WORKTREES_DIR ?? null,",
+        "  paperclipAgentJwtSecret: process.env.PAPERCLIP_AGENT_JWT_SECRET ?? null,",
+        "  databaseUrl: process.env.DATABASE_URL ?? null,",
+        "  npmConfigTailscaleAuth: process.env.npm_config_tailscale_auth ?? null,",
+        "  npmConfigAuthenticatedPrivate: process.env.npm_config_authenticated_private ?? null,",
+        "}));",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.chmod(hookPath, 0o755);
+    await runGit(repoRoot, ["config", "core.hooksPath", hooksDir]);
+
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "capture-provision-env.js"),
+      [
+        "const fs = require('node:fs');",
+        "fs.writeFileSync('.paperclip-provision-env.json', JSON.stringify({",
+        "  paperclipConfig: process.env.PAPERCLIP_CONFIG ?? null,",
+        "  paperclipHome: process.env.PAPERCLIP_HOME ?? null,",
+        "  paperclipInstanceId: process.env.PAPERCLIP_INSTANCE_ID ?? null,",
+        "  paperclipWorktreesDir: process.env.PAPERCLIP_WORKTREES_DIR ?? null,",
+        "  paperclipAgentJwtSecret: process.env.PAPERCLIP_AGENT_JWT_SECRET ?? null,",
+        "  databaseUrl: process.env.DATABASE_URL ?? null,",
+        "  npmConfigTailscaleAuth: process.env.npm_config_tailscale_auth ?? null,",
+        "  npmConfigAuthenticatedPrivate: process.env.npm_config_authenticated_private ?? null,",
+        "  paperclipWorkspaceBranch: process.env.PAPERCLIP_WORKSPACE_BRANCH ?? null,",
+        "  paperclipWorkspaceBaseCwd: process.env.PAPERCLIP_WORKSPACE_BASE_CWD ?? null,",
+        "  paperclipWorkspaceCreated: process.env.PAPERCLIP_WORKSPACE_CREATED ?? null,",
+        "  paperclipCompanyId: process.env.PAPERCLIP_COMPANY_ID ?? null,",
+        "  paperclipIssueId: process.env.PAPERCLIP_ISSUE_ID ?? null,",
+        "}));",
+      ].join("\n"),
+      "utf8",
+    );
+    await runGit(repoRoot, ["add", ".githooks/post-checkout", "scripts/capture-provision-env.js"]);
+    await runGit(repoRoot, ["commit", "-m", "Add env capture fixtures"]);
+
+    process.env.PAPERCLIP_CONFIG = "/tmp/base-paperclip-config.json";
+    process.env.PAPERCLIP_HOME = "/tmp/base-paperclip-home";
+    process.env.PAPERCLIP_INSTANCE_ID = "base-instance";
+    process.env.PAPERCLIP_WORKTREES_DIR = "/tmp/base-paperclip-worktrees";
+    process.env.PAPERCLIP_AGENT_JWT_SECRET = "super-secret";
+    process.env.DATABASE_URL = "postgres://shared-db.example.com/paperclip";
+    process.env.npm_config_tailscale_auth = "true";
+    process.env.npm_config_authenticated_private = "true";
+
+    const workspace = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "node ./scripts/capture-provision-env.js",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-450",
+        title: "Sanitize worktree subprocess env",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    const hookCaptured = JSON.parse(await fs.readFile(hookCapturePath, "utf8")) as Record<string, string | null>;
+    const provisionCaptured = JSON.parse(
+      await fs.readFile(path.join(workspace.cwd, ".paperclip-provision-env.json"), "utf8"),
+    ) as Record<string, string | null>;
+
+    expect(hookCaptured.paperclipConfig).toBeNull();
+    expect(hookCaptured.paperclipHome).toBeNull();
+    expect(hookCaptured.paperclipInstanceId).toBeNull();
+    expect(hookCaptured.paperclipWorktreesDir).toBeNull();
+    expect(hookCaptured.paperclipAgentJwtSecret).toBeNull();
+    expect(hookCaptured.databaseUrl).toBeNull();
+    expect(hookCaptured.npmConfigTailscaleAuth).toBeNull();
+    expect(hookCaptured.npmConfigAuthenticatedPrivate).toBeNull();
+
+    expect(provisionCaptured.paperclipConfig).toBeNull();
+    expect(provisionCaptured.paperclipHome).toBeNull();
+    expect(provisionCaptured.paperclipInstanceId).toBeNull();
+    expect(provisionCaptured.paperclipWorktreesDir).toBe("/tmp/base-paperclip-worktrees");
+    expect(provisionCaptured.paperclipAgentJwtSecret).toBeNull();
+    expect(provisionCaptured.databaseUrl).toBeNull();
+    expect(provisionCaptured.npmConfigTailscaleAuth).toBeNull();
+    expect(provisionCaptured.npmConfigAuthenticatedPrivate).toBeNull();
+    expect(provisionCaptured.paperclipWorkspaceBranch).toBe("PAP-450-sanitize-worktree-subprocess-env");
+    expect(provisionCaptured.paperclipWorkspaceBaseCwd).toBe(repoRoot);
+    expect(provisionCaptured.paperclipWorkspaceCreated).toBe("true");
+    expect(provisionCaptured.paperclipCompanyId).toBe("company-1");
+    expect(provisionCaptured.paperclipIssueId).toBe("issue-1");
   });
 
   it("uses the latest repo-managed provision script when reusing an existing worktree", async () => {

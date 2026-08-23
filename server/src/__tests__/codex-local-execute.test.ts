@@ -1159,11 +1159,13 @@ describe("codex execute", () => {
     const previousPaperclipHome = process.env.PAPERCLIP_HOME;
     const previousPaperclipInstanceId = process.env.PAPERCLIP_INSTANCE_ID;
     const previousPaperclipInWorktree = process.env.PAPERCLIP_IN_WORKTREE;
+    const previousPaperclipAgentJwtSecret = process.env.PAPERCLIP_AGENT_JWT_SECRET;
     const previousCodexHome = process.env.CODEX_HOME;
     process.env.HOME = root;
     process.env.PAPERCLIP_HOME = paperclipHome;
     process.env.PAPERCLIP_INSTANCE_ID = "worktree-1";
     process.env.PAPERCLIP_IN_WORKTREE = "true";
+    process.env.PAPERCLIP_AGENT_JWT_SECRET = "server-only-secret";
     process.env.CODEX_HOME = sharedCodexHome;
 
     try {
@@ -1217,6 +1219,7 @@ describe("codex execute", () => {
           "PAPERCLIP_RUN_ID",
         ]),
       );
+      expect(capture.paperclipEnvKeys).not.toContain("PAPERCLIP_AGENT_JWT_SECRET");
 
       const isolatedAuth = path.join(isolatedCodexHome, "auth.json");
       const isolatedConfig = path.join(isolatedCodexHome, "config.toml");
@@ -1247,6 +1250,8 @@ describe("codex execute", () => {
       else process.env.PAPERCLIP_INSTANCE_ID = previousPaperclipInstanceId;
       if (previousPaperclipInWorktree === undefined) delete process.env.PAPERCLIP_IN_WORKTREE;
       else process.env.PAPERCLIP_IN_WORKTREE = previousPaperclipInWorktree;
+      if (previousPaperclipAgentJwtSecret === undefined) delete process.env.PAPERCLIP_AGENT_JWT_SECRET;
+      else process.env.PAPERCLIP_AGENT_JWT_SECRET = previousPaperclipAgentJwtSecret;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
       await fs.rm(root, { recursive: true, force: true });

@@ -498,7 +498,7 @@ async function executeProcess(input: {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: input.env ?? process.env,
+      env: input.env ?? sanitizeRuntimeServiceBaseEnv(process.env),
     });
     const stdout = createProcessOutputCapture(input.maxStdoutBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
     const stderr = createProcessOutputCapture(input.maxStderrBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
@@ -1358,7 +1358,9 @@ function buildWorkspaceCommandEnv(input: {
   agent: ExecutionWorkspaceAgentRef;
   created: boolean;
 }) {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Provision commands should receive explicit workspace metadata, not the
+  // server's full secret-bearing runtime environment.
+  const env: NodeJS.ProcessEnv = sanitizeRuntimeServiceBaseEnv(process.env);
   env.PAPERCLIP_WORKSPACE_CWD = input.worktreePath;
   env.PAPERCLIP_WORKSPACE_PATH = input.worktreePath;
   env.PAPERCLIP_WORKSPACE_WORKTREE_PATH = input.worktreePath;
@@ -1369,6 +1371,9 @@ function buildWorkspaceCommandEnv(input: {
   env.PAPERCLIP_WORKSPACE_REPO_REF = input.base.repoRef ?? "";
   env.PAPERCLIP_WORKSPACE_REPO_URL = input.base.repoUrl ?? "";
   env.PAPERCLIP_WORKSPACE_CREATED = input.created ? "true" : "false";
+  if (typeof process.env.PAPERCLIP_WORKTREES_DIR === "string" && process.env.PAPERCLIP_WORKTREES_DIR.trim().length > 0) {
+    env.PAPERCLIP_WORKTREES_DIR = process.env.PAPERCLIP_WORKTREES_DIR.trim();
+  }
   env.PAPERCLIP_PROJECT_ID = input.base.projectId ?? "";
   env.PAPERCLIP_PROJECT_WORKSPACE_ID = input.base.workspaceId ?? "";
   env.PAPERCLIP_AGENT_ID = input.agent.id ?? "";

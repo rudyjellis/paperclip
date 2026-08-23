@@ -35,6 +35,7 @@ import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   joinPromptSections,
   renderPaperclipWakePrompt,
+  sanitizeInheritedPaperclipEnv,
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
 
@@ -455,7 +456,7 @@ export async function execute(
   // ── Build environment ──────────────────────────────────────────────────
   const userEnv = config.env as Record<string, string> | undefined;
   const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
+    ...sanitizeInheritedPaperclipEnv(process.env),
     ...(userEnv && typeof userEnv === "object" ? userEnv : {}),
     ...buildPaperclipEnv(ctx.agent),
   };

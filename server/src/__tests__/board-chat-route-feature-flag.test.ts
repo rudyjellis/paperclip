@@ -1,7 +1,7 @@
 import express from "express";
 import { EventEmitter } from "node:events";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGetExperimental = vi.hoisted(() => vi.fn());
 const mockIssueService = vi.hoisted(() => ({
@@ -82,6 +82,21 @@ describe("POST /api/board/chat/stream feature flag guard (PAP-137)", () => {
 });
 
 describe("board-chat client disconnect", () => {
+  let previousPaperclipAgentJwtSecret: string | undefined;
+
+  beforeEach(() => {
+    previousPaperclipAgentJwtSecret = process.env.PAPERCLIP_AGENT_JWT_SECRET;
+    process.env.PAPERCLIP_AGENT_JWT_SECRET = "server-only-secret";
+  });
+
+  afterEach(() => {
+    if (previousPaperclipAgentJwtSecret === undefined) {
+      delete process.env.PAPERCLIP_AGENT_JWT_SECRET;
+    } else {
+      process.env.PAPERCLIP_AGENT_JWT_SECRET = previousPaperclipAgentJwtSecret;
+    }
+  });
+
   function makeFakeProc() {
     const proc = new EventEmitter() as any;
     proc.stdout = new EventEmitter();
@@ -125,6 +140,37 @@ describe("board-chat client disconnect", () => {
     // Let the subprocess close handler run so the slot is released.
     fakeProc.exitCode = 143;
     fakeProc.emit("close", 143);
+    await pending;
+  });
+
+  it("does not leak server-only Paperclip secrets into the spawned claude env", async () => {
+    mockGetExperimental.mockResolvedValue({ enableConferenceRoomChat: true });
+    mockIssueService.list.mockResolvedValue([
+      { id: "issue-1", title: "Board Operations", status: "todo" },
+    ]);
+    mockIssueService.addComment.mockResolvedValue({ id: "comment-1" });
+    mockIssueService.listComments.mockResolvedValue([]);
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc);
+    const app = await createApp();
+
+    const req = request(app)
+      .post("/api/board/chat/stream")
+      .send({ companyId: "company-1", message: "hello" });
+    const pending = req.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    expect(mockSpawn.mock.calls[0]?.[2]?.env).not.toHaveProperty("PAPERCLIP_AGENT_JWT_SECRET");
+    expect(mockSpawn.mock.calls[0]?.[2]?.env).toMatchObject({
+      PAPERCLIP_COMPANY_ID: "company-1",
+    });
+
+    await vi.waitFor(() => expect(fakeProc.stdin.end).toHaveBeenCalled());
+    fakeProc.exitCode = 0;
+    fakeProc.emit("close", 0);
     await pending;
   });
 });
