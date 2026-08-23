@@ -15,6 +15,21 @@ Use these scripts:
 
 Paperclip no longer uses release branches or Changesets for publishing.
 
+## GitHub target guardrail
+
+Release scripts resolve the publish remote through [`scripts/release-lib.sh`](../scripts/release-lib.sh).
+For internal Paperclip work, they prefer a configured `fork` remote and fail closed if the selected GitHub remote resolves to `paperclipai/paperclip`.
+This guard applies to release and GitHub Release scripts; this repository does not currently include an in-repo PR-opening command path.
+PR target guardrails for agent workspaces and git remotes belong to the workspace/remote setup path tracked by DIG-564.
+
+If upstream publishing is intentionally being run by maintainers, set an explicit intent signal:
+
+```bash
+PAPERCLIP_UPSTREAM_INTENT=release PUBLISH_REMOTE=origin ./scripts/release.sh stable
+```
+
+When this guard blocks a target, route the upstream coordination through a Paperclip issue before retrying with an explicit intent signal.
+
 ## Why the CLI needs special packaging
 
 The CLI package, `paperclipai`, imports code from workspace packages such as:
